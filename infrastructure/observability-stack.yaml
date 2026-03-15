@@ -1,0 +1,301 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Unified Observability Store and LLM Judge infrastructure (Requirement 19 / Task 28).
+  Includes S3 compliance bucket with 7-year lifecycle, CloudWatch Logs subscription
+  filters, Athena workgroup, LLM Judge Lambda, and IAM access restrictions.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: advisory
+    Description: Environment name prefix
+
+  KMSKeyId:
+    Type: String
+    Description: KMS Key ID for encryption
+
+  ComplianceViolationsTableArn:
+    Type: String
+    Description: ARN of the ComplianceViolations DynamoDB table
+
+  ComplianceViolationsTableStreamArn:
+    Type: String
+    Description: Stream ARN of the ComplianceViolations DynamoDB table
+
+  AgentExecutionRoleArn:
+    Type: String
+    Description: ARN of the agent execution role
+
+Resources:
+  # ============================================================================
+  # S3 Compliance Bucket — 7-year lifecycle (Task 28.1)
+  # ============================================================================
+
+  ComplianceLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-compliance-logs-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref KMSKeyId
+            BucketKeyEnabled: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          # 7-year retention per FINRA record-keeping requirements
+          - Id: ComplianceRetention7Years
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 365
+                StorageClass: GLACIER
+            ExpirationInDays: 2555  # ~7 years
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-compliance-logs
+        - Key: Purpose
+          Value: Compliance logs 7-year retention (FINRA)
+        - Key: RetentionYears
+          Value: "7"
+
+  ComplianceLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ComplianceLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ComplianceLogsBucket.Arn
+              - !Sub ${ComplianceLogsBucket.Arn}/*
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+          - Sid: AllowComplianceRolesRead
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-compliance-officer-role
+                - !Sub arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-risk-manager-role
+            Action:
+              - 's3:GetObject'
+              - 's3:ListBucket'
+            Resource:
+              - !GetAtt ComplianceLogsBucket.Arn
+              - !Sub ${ComplianceLogsBucket.Arn}/*
+
+  # ============================================================================
+  # Athena Workgroup for querying compliance data (Task 28.1)
+  # ============================================================================
+
+  ComplianceAthenaWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-compliance-workgroup
+      Description: Athena workgroup for querying compliance logs and violation records
+      WorkGroupConfiguration:
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${ComplianceLogsBucket}/athena-results/
+          EncryptionConfiguration:
+            EncryptionOption: SSE_KMS
+            KmsKey: !Ref KMSKeyId
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ============================================================================
+  # LLM Judge Lambda Function (Task 28.2)
+  # ============================================================================
+
+  LLMJudgeLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-llm-judge-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LLMJudgePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-*
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource: !Ref ComplianceViolationsTableArn
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:DescribeStream
+                  - dynamodb:ListStreams
+                Resource: !Ref ComplianceViolationsTableStreamArn
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+
+  LLMJudgeLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-llm-judge
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt LLMJudgeLambdaRole.Arn
+      Timeout: 120
+      MemorySize: 512
+      Code:
+        ZipFile: |
+          # Placeholder — deployed via CI/CD pipeline
+          def lambda_handler(event, context):
+              return {"status": "placeholder"}
+      Environment:
+        Variables:
+          COMPLIANCE_VIOLATIONS_TABLE: !Sub ${EnvironmentName}-compliance-violations
+          BEDROCK_MODEL_ID: anthropic.claude-3-5-sonnet-20241022-v2:0
+          LOG_LEVEL: INFO
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: LLM Judge for second-line-of-defense compliance review
+
+  # DynamoDB Streams trigger for LLM Judge
+  LLMJudgeDynamoDBTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !Ref ComplianceViolationsTableStreamArn
+      FunctionName: !GetAtt LLMJudgeLambdaFunction.Arn
+      StartingPosition: LATEST
+      BatchSize: 10
+      FilterCriteria:
+        Filters:
+          - Pattern: '{"dynamodb": {"NewImage": {"investigation_status": {"S": ["pending"]}}}}'
+
+  # ============================================================================
+  # IAM Access Restrictions (Task 28.3)
+  # ============================================================================
+
+  ComplianceOfficerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-compliance-officer-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Sub ${EnvironmentName}-compliance-officer
+      Policies:
+        - PolicyName: ComplianceOfficerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !Ref ComplianceViolationsTableArn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ComplianceLogsBucket.Arn
+                  - !Sub ${ComplianceLogsBucket.Arn}/*
+
+  RiskManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-risk-manager-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Sub ${EnvironmentName}-risk-manager
+      Policies:
+        - PolicyName: RiskManagerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource: !Ref ComplianceViolationsTableArn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ComplianceLogsBucket.Arn
+                  - !Sub ${ComplianceLogsBucket.Arn}/*
+
+Outputs:
+  ComplianceLogsBucketName:
+    Value: !Ref ComplianceLogsBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-compliance-logs-bucket-name
+
+  ComplianceLogsBucketArn:
+    Value: !GetAtt ComplianceLogsBucket.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-compliance-logs-bucket-arn
+
+  LLMJudgeLambdaArn:
+    Value: !GetAtt LLMJudgeLambdaFunction.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-llm-judge-lambda-arn
+
+  ComplianceAthenaWorkgroupName:
+    Value: !Ref ComplianceAthenaWorkgroup
+    Export:
+      Name: !Sub ${EnvironmentName}-compliance-athena-workgroup

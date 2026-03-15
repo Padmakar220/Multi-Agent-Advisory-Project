@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ADOT Lambda Layer and environment variable configuration for distributed tracing
+  (Requirement 18 / Task 27.1). Attaches the AWS Distro for OpenTelemetry Python
+  Lambda layer to all agent Lambda functions and configures W3C TraceContext propagation.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: advisory
+    Description: Environment name prefix for resources
+
+  ADOTLayerArn:
+    Type: String
+    Description: >
+      ARN of the AWS Distro for OpenTelemetry Python Lambda layer.
+      Example: arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1
+    Default: "arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:1"
+
+  OTELCollectorConfig:
+    Type: String
+    Default: "/opt/collector.yaml"
+    Description: Path to the ADOT collector configuration file
+
+Resources:
+  # ============================================================================
+  # ADOT Collector Configuration (stored in SSM for Lambda to read)
+  # ============================================================================
+
+  ADOTCollectorConfigParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/adot/collector-config
+      Type: String
+      Value: |
+        extensions:
+          health_check:
+
+        receivers:
+          otlp:
+            protocols:
+              grpc:
+                endpoint: "0.0.0.0:4317"
+              http:
+                endpoint: "0.0.0.0:4318"
+
+        processors:
+          batch/traces:
+            timeout: 1s
+            send_batch_size: 50
+
+        exporters:
+          awsxray:
+            region: "${AWS::Region}"
+          logging:
+            loglevel: warn
+
+        service:
+          pipelines:
+            traces:
+              receivers: [otlp]
+              processors: [batch/traces]
+              exporters: [awsxray]
+          extensions: [health_check]
+      Description: ADOT collector configuration for X-Ray export
+
+  # ============================================================================
+  # Lambda function environment variable updates via custom resource
+  # (In practice these are set directly on each Lambda function definition)
+  # ============================================================================
+
+  # ADOT environment variables to add to ALL agent Lambda functions:
+  #
+  #   AWS_LAMBDA_EXEC_WRAPPER=/opt/otel-instrument
+  #   OTEL_PROPAGATORS=xray,tracecontext
+  #   OTEL_PYTHON_ID_GENERATOR=xray
+  #   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+  #   OTEL_SERVICE_NAME=<function-name>
+  #
+  # The ADOT layer ARN to attach to each Lambda:
+  #   !Ref ADOTLayerArn
+  #
+  # These are documented here and applied in compute-stack.yaml Lambda definitions.
+
+Outputs:
+  ADOTLayerArn:
+    Description: ARN of the ADOT Lambda layer to attach to agent functions
+    Value: !Ref ADOTLayerArn
+    Export:
+      Name: !Sub ${EnvironmentName}-adot-layer-arn
+
+  ADOTCollectorConfigParameterName:
+    Description: SSM parameter name for ADOT collector config
+    Value: !Ref ADOTCollectorConfigParameter
+    Export:
+      Name: !Sub ${EnvironmentName}-adot-collector-config-param

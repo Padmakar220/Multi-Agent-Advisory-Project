@@ -1,0 +1,37 @@
+# AWS SDK and Infrastructure
+boto3>=1.34.72
+botocore>=1.34.72
+
+# AI and Agent Orchestration
+langgraph==0.0.26
+langchain==0.1.4
+langchain-aws==0.1.0
+
+# Testing Frameworks
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+hypothesis==6.98.3
+
+# AWS Lambda Development
+aws-lambda-powertools==2.31.0
+
+# Data Validation and Serialization
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Utilities
+python-dateutil==2.8.2
+requests==2.31.0
+
+# Development Tools
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
+isort==5.13.2
+
+# Local Testing
+moto==5.0.0
+localstack-client==2.5
+pytest-timeout==2.2.0
+pytest-junit==0.1.0

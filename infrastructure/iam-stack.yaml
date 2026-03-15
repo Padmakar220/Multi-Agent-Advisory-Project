@@ -1,0 +1,457 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM roles and policies for Multi-Agent Advisory AI System - Agent execution roles, Step Functions roles, and least-privilege policies'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name prefix for resources
+    Type: String
+    Default: advisory
+    AllowedValues:
+      - advisory
+      - advisory-dev
+      - advisory-staging
+      - advisory-prod
+
+  BedrockModelId:
+    Description: Bedrock model ID for Claude 3.5 Sonnet
+    Type: String
+    Default: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+
+  KMSKeyArn:
+    Description: ARN of KMS key for DynamoDB encryption (optional, will be created if not provided)
+    Type: String
+    Default: ''
+
+Conditions:
+  CreateKMSKey: !Equals [!Ref KMSKeyArn, '']
+
+Resources:
+  # KMS Key for DynamoDB Encryption
+  DynamoDBEncryptionKey:
+    Type: AWS::KMS::Key
+    Condition: CreateKMSKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: KMS key for encrypting DynamoDB tables in Multi-Agent Advisory AI System
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow DynamoDB to use the key
+            Effect: Allow
+            Principal:
+              Service: dynamodb.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:CreateGrant'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'dynamodb.${AWS::Region}.amazonaws.com'
+          - Sid: Allow Lambda to use the key
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'dynamodb.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-dynamodb-encryption-key
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DynamoDBEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Condition: CreateKMSKey
+    Properties:
+      AliasName: !Sub 'alias/${EnvironmentName}-dynamodb-encryption'
+      TargetKeyId: !Ref DynamoDBEncryptionKey
+
+  # Agent Execution Role - Used by Lambda functions running agent logic
+  AgentExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-agent-execution-role
+      Description: Execution role for AI agents with permissions for Bedrock, DynamoDB, OpenSearch, and CloudWatch
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - bedrock.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-agent-execution-role
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Bedrock Access Policy - Allows agents to invoke foundation models
+  BedrockAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-bedrock-access-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBedrockModelInvocation
+            Effect: Allow
+            Action:
+              - 'bedrock:InvokeModel'
+              - 'bedrock:InvokeModelWithResponseStream'
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-*'
+          - Sid: AllowBedrockAgentRuntime
+            Effect: Allow
+            Action:
+              - 'bedrock:InvokeAgent'
+              - 'bedrock:Retrieve'
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*'
+      Roles:
+        - !Ref AgentExecutionRole
+
+  # DynamoDB Access Policy - Allows agents to read/write portfolio data with user isolation
+  DynamoDBAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-dynamodb-access-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowDynamoDBTableOperations
+            Effect: Allow
+            Action:
+              - 'dynamodb:GetItem'
+              - 'dynamodb:PutItem'
+              - 'dynamodb:UpdateItem'
+              - 'dynamodb:DeleteItem'
+              - 'dynamodb:Query'
+              - 'dynamodb:Scan'
+              - 'dynamodb:BatchGetItem'
+              - 'dynamodb:BatchWriteItem'
+            Resource:
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-portfolios'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-transactions'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-agent-sessions'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-market-data-cache'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-portfolios/index/*'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-transactions/index/*'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-agent-sessions/index/*'
+          - Sid: AllowDynamoDBStreamAccess
+            Effect: Allow
+            Action:
+              - 'dynamodb:DescribeStream'
+              - 'dynamodb:GetRecords'
+              - 'dynamodb:GetShardIterator'
+              - 'dynamodb:ListStreams'
+            Resource:
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-portfolios/stream/*'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-transactions/stream/*'
+      Roles:
+        - !Ref AgentExecutionRole
+
+  # OpenSearch Serverless Access Policy - Allows agents to query market data
+  OpenSearchAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-opensearch-access-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowOpenSearchServerlessAccess
+            Effect: Allow
+            Action:
+              - 'aoss:APIAccessAll'
+            Resource:
+              - !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+          - Sid: AllowOpenSearchServerlessDescribe
+            Effect: Allow
+            Action:
+              - 'aoss:ListCollections'
+              - 'aoss:BatchGetCollection'
+            Resource: '*'
+      Roles:
+        - !Ref AgentExecutionRole
+
+  # CloudWatch Logs Policy - Allows agents to write logs
+  CloudWatchLogsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-cloudwatch-logs-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudWatchLogsAccess
+            Effect: Allow
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+              - 'logs:DescribeLogStreams'
+            Resource:
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${EnvironmentName}-*'
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${EnvironmentName}-*:*'
+          - Sid: AllowCloudWatchMetrics
+            Effect: Allow
+            Action:
+              - 'cloudwatch:PutMetricData'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'cloudwatch:namespace': !Sub '${EnvironmentName}/Agents'
+      Roles:
+        - !Ref AgentExecutionRole
+
+  # KMS Access Policy - Allows agents to decrypt/encrypt DynamoDB data
+  KMSAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-kms-access-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowKMSForDynamoDB
+            Effect: Allow
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+              - 'kms:DescribeKey'
+            Resource:
+              - !If
+                - CreateKMSKey
+                - !GetAtt DynamoDBEncryptionKey.Arn
+                - !Ref KMSKeyArn
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'dynamodb.${AWS::Region}.amazonaws.com'
+      Roles:
+        - !Ref AgentExecutionRole
+
+  # Step Functions Execution Role - Used by Step Functions to orchestrate workflows
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-stepfunctions-execution-role
+      Description: Execution role for Step Functions workflows with Lambda invocation permissions
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-stepfunctions-execution-role
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Lambda Invocation Policy for Step Functions
+  StepFunctionsLambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-stepfunctions-lambda-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaInvocation
+            Effect: Allow
+            Action:
+              - 'lambda:InvokeFunction'
+            Resource:
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-supervisor-*'
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-portfolio-analyzer-*'
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-tax-optimizer-*'
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-rebalancing-agent-*'
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-trade-executor-*'
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-approval-handler-*'
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-portfolio-updater-*'
+      Roles:
+        - !Ref StepFunctionsExecutionRole
+
+  # CloudWatch Logs Policy for Step Functions
+  StepFunctionsLogsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-stepfunctions-logs-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudWatchLogsForStepFunctions
+            Effect: Allow
+            Action:
+              - 'logs:CreateLogDelivery'
+              - 'logs:GetLogDelivery'
+              - 'logs:UpdateLogDelivery'
+              - 'logs:DeleteLogDelivery'
+              - 'logs:ListLogDeliveries'
+              - 'logs:PutResourcePolicy'
+              - 'logs:DescribeResourcePolicies'
+              - 'logs:DescribeLogGroups'
+            Resource: '*'
+      Roles:
+        - !Ref StepFunctionsExecutionRole
+
+  # X-Ray Tracing Policy for Step Functions
+  StepFunctionsXRayPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-stepfunctions-xray-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowXRayTracing
+            Effect: Allow
+            Action:
+              - 'xray:PutTraceSegments'
+              - 'xray:PutTelemetryRecords'
+              - 'xray:GetSamplingRules'
+              - 'xray:GetSamplingTargets'
+            Resource: '*'
+      Roles:
+        - !Ref StepFunctionsExecutionRole
+
+  # SNS Publish Policy for Step Functions (for alerts)
+  StepFunctionsSNSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-stepfunctions-sns-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSNSPublish
+            Effect: Allow
+            Action:
+              - 'sns:Publish'
+            Resource:
+              - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-*'
+      Roles:
+        - !Ref StepFunctionsExecutionRole
+
+  # API Gateway Execution Role - Used by API Gateway to invoke Step Functions
+  ApiExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-api-execution-role
+      Description: Execution role for API Gateway with permissions to invoke Step Functions and Lambda
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-api-execution-role
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Step Functions Invocation Policy for API Gateway
+  ApiStepFunctionsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-api-stepfunctions-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowStepFunctionsExecution
+            Effect: Allow
+            Action:
+              - 'states:StartExecution'
+            Resource:
+              - !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-*'
+      Roles:
+        - !Ref ApiExecutionRole
+
+  # Lambda Invocation Policy for API Gateway (for approval handler)
+  ApiLambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-api-lambda-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaInvocation
+            Effect: Allow
+            Action:
+              - 'lambda:InvokeFunction'
+            Resource:
+              - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-approval-handler-*'
+      Roles:
+        - !Ref ApiExecutionRole
+
+Outputs:
+  AgentExecutionRoleArn:
+    Description: ARN of the Agent Execution Role
+    Value: !GetAtt AgentExecutionRole.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-agent-execution-role-arn
+
+  AgentExecutionRoleName:
+    Description: Name of the Agent Execution Role
+    Value: !Ref AgentExecutionRole
+    Export:
+      Name: !Sub ${EnvironmentName}-agent-execution-role-name
+
+  StepFunctionsExecutionRoleArn:
+    Description: ARN of the Step Functions Execution Role
+    Value: !GetAtt StepFunctionsExecutionRole.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-stepfunctions-execution-role-arn
+
+  StepFunctionsExecutionRoleName:
+    Description: Name of the Step Functions Execution Role
+    Value: !Ref StepFunctionsExecutionRole
+    Export:
+      Name: !Sub ${EnvironmentName}-stepfunctions-execution-role-name
+
+  ApiExecutionRoleArn:
+    Description: ARN of the API Execution Role
+    Value: !GetAtt ApiExecutionRole.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-api-execution-role-arn
+
+  ApiExecutionRoleName:
+    Description: Name of the API Execution Role
+    Value: !Ref ApiExecutionRole
+    Export:
+      Name: !Sub ${EnvironmentName}-api-execution-role-name
+
+  DynamoDBEncryptionKeyArn:
+    Description: ARN of the DynamoDB encryption KMS key
+    Value: !If
+      - CreateKMSKey
+      - !GetAtt DynamoDBEncryptionKey.Arn
+      - !Ref KMSKeyArn
+    Export:
+      Name: !Sub ${EnvironmentName}-dynamodb-encryption-key-arn
+
+  DynamoDBEncryptionKeyId:
+    Description: ID of the DynamoDB encryption KMS key
+    Value: !If
+      - CreateKMSKey
+      - !Ref DynamoDBEncryptionKey
+      - !Select [1, !Split ['/', !Ref KMSKeyArn]]
+    Export:
+      Name: !Sub ${EnvironmentName}-dynamodb-encryption-key-id

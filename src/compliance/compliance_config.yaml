@@ -1,0 +1,29 @@
+# compliance_config.yaml — runtime-loadable, no code changes required
+# Adjust thresholds, enable/disable rules, or set severity overrides here.
+
+domains:
+  FINRA:
+    # halt_threshold: severity >= this level causes processing to halt
+    halt_threshold: high
+    rules:
+      FINRA-001: { enabled: true, severity_override: null }
+      FINRA-002: { enabled: true, severity_override: null }
+      FINRA-003: { enabled: true, severity_override: null }
+      FINRA-004: { enabled: true, severity_override: null }
+
+  NIST:
+    halt_threshold: critical
+    rules:
+      NIST-001: { enabled: true, severity_override: null }
+      NIST-002: { enabled: true, severity_override: null }
+      NIST-003: { enabled: true, severity_override: null }
+      NIST-004: { enabled: true, severity_override: null }
+
+  PCI_DSS:
+    halt_threshold: high
+    rules:
+      PCI-001: { enabled: true, severity_override: critical }
+      PCI-002: { enabled: true, severity_override: critical }
+      PCI-003: { enabled: true, severity_override: high }
+      PCI-004: { enabled: true, severity_override: critical }
+      PCI-005: { enabled: true, severity_override: null }

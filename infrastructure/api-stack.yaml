@@ -1,0 +1,535 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'API Stack - API Gateway, Cognito, and Authentication'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  StepFunctionsStateMachineArn:
+    Type: String
+    Description: ARN of the Portfolio Rebalancing State Machine
+  
+  ApiExecutionRoleArn:
+    Type: String
+    Description: ARN of the API Execution Role from IAM stack
+
+Resources:
+  # Cognito User Pool
+  PortfolioUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub 'portfolio-management-users-${Environment}'
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: false
+        - Name: name
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+      AutoVerifiedAttributes:
+        - email
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Cognito User Pool Client
+  PortfolioUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref PortfolioUserPool
+      ClientName: !Sub 'portfolio-client-${Environment}'
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - !Sub 'https://${Environment}-portfolio.example.com/callback'
+      LogoutURLs:
+        - !Sub 'https://${Environment}-portfolio.example.com/logout'
+      AllowUserPasswordAuthFlow: true
+      AllowUserSrpAuthFlow: true
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+
+  # Cognito User Pool Domain
+  PortfolioUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub 'portfolio-${Environment}-${AWS::AccountId}'
+      UserPoolId: !Ref PortfolioUserPool
+
+  # API Gateway REST API
+  PortfolioManagementApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub 'portfolio-management-api-${Environment}'
+      Description: Portfolio Management API with Cognito Authentication
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Cognito Authorizer
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoAuthorizer
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      RestApiId: !Ref PortfolioManagementApi
+      ProviderARNs:
+        - !GetAtt PortfolioUserPool.Arn
+
+  # Request Model for Rebalance
+  RebalanceRequestModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      Name: RebalanceRequest
+      ContentType: application/json
+      Schema:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        required:
+          - user_id
+          - portfolio_id
+        properties:
+          user_id:
+            type: string
+            description: User ID
+          portfolio_id:
+            type: string
+            description: Portfolio ID
+          request_type:
+            type: string
+            enum: [rebalance]
+            default: rebalance
+          parameters:
+            type: object
+            properties:
+              include_tax_optimization:
+                type: boolean
+                default: true
+
+  # Request Model for Analysis
+  AnalysisRequestModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      Name: AnalysisRequest
+      ContentType: application/json
+      Schema:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        required:
+          - user_id
+          - portfolio_id
+        properties:
+          user_id:
+            type: string
+            description: User ID
+          portfolio_id:
+            type: string
+            description: Portfolio ID
+          request_type:
+            type: string
+            enum: [analyze]
+            default: analyze
+          parameters:
+            type: object
+            properties:
+              analysis_type:
+                type: string
+                enum: [performance, risk, drift]
+                default: performance
+
+  # Request Model for Tax Optimization
+  TaxOptimizeRequestModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      Name: TaxOptimizeRequest
+      ContentType: application/json
+      Schema:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        required:
+          - user_id
+          - portfolio_id
+        properties:
+          user_id:
+            type: string
+            description: User ID
+          portfolio_id:
+            type: string
+            description: Portfolio ID
+          request_type:
+            type: string
+            enum: [tax_optimize]
+            default: tax_optimize
+          parameters:
+            type: object
+            properties:
+              tax_year:
+                type: integer
+                minimum: 2000
+                maximum: 2100
+
+  # Response Model
+  WorkflowResponseModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      Name: WorkflowResponse
+      ContentType: application/json
+      Schema:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        properties:
+          execution_arn:
+            type: string
+            description: Step Functions execution ARN
+          execution_name:
+            type: string
+            description: Execution name
+          status:
+            type: string
+            enum: [RUNNING, SUCCEEDED, FAILED, TIMED_OUT, ABORTED]
+          start_time:
+            type: string
+            format: date-time
+
+  # Approval Response Model
+  ApprovalResponseModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      Name: ApprovalResponse
+      ContentType: application/json
+      Schema:
+        $schema: http://json-schema.org/draft-07/schema#
+        type: object
+        required:
+          - task_token
+          - approval_status
+        properties:
+          task_token:
+            type: string
+            description: Step Functions task token
+          approval_status:
+            type: string
+            enum: [approved, rejected, cancelled]
+          feedback:
+            type: string
+            description: User feedback for rejection
+
+  # Request Validator
+  RequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      Name: RequestValidator
+      ValidateRequestBody: true
+      ValidateRequestParameters: true
+
+  # /rebalance Resource
+  RebalanceResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ParentId: !GetAtt PortfolioManagementApi.RootResourceId
+      PathPart: rebalance
+
+  # POST /rebalance Method
+  RebalanceMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ResourceId: !Ref RebalanceResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      RequestValidatorId: !Ref RequestValidator
+      RequestModels:
+        application/json: !Ref RebalanceRequestModel
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:states:action/StartExecution'
+        Credentials: !Ref ApiExecutionRoleArn
+        RequestTemplates:
+          application/json: !Sub |
+            {
+              "stateMachineArn": "${StepFunctionsStateMachineArn}",
+              "input": "$input.json('$')"
+            }
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: |
+                {
+                  "execution_arn": "$input.path('$.executionArn')",
+                  "execution_name": "$input.path('$.name')",
+                  "status": "RUNNING",
+                  "start_time": "$context.requestTime"
+                }
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: !Ref WorkflowResponseModel
+        - StatusCode: 400
+        - StatusCode: 401
+        - StatusCode: 500
+
+  # /analyze Resource
+  AnalyzeResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ParentId: !GetAtt PortfolioManagementApi.RootResourceId
+      PathPart: analyze
+
+  # POST /analyze Method
+  AnalyzeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ResourceId: !Ref AnalyzeResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      RequestValidatorId: !Ref RequestValidator
+      RequestModels:
+        application/json: !Ref AnalysisRequestModel
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:states:action/StartExecution'
+        Credentials: !Ref ApiExecutionRoleArn
+        RequestTemplates:
+          application/json: !Sub |
+            {
+              "stateMachineArn": "${StepFunctionsStateMachineArn}",
+              "input": "$input.json('$')"
+            }
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: |
+                {
+                  "execution_arn": "$input.path('$.executionArn')",
+                  "execution_name": "$input.path('$.name')",
+                  "status": "RUNNING",
+                  "start_time": "$context.requestTime"
+                }
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: !Ref WorkflowResponseModel
+        - StatusCode: 400
+        - StatusCode: 401
+        - StatusCode: 500
+
+  # /optimize-tax Resource
+  OptimizeTaxResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ParentId: !GetAtt PortfolioManagementApi.RootResourceId
+      PathPart: optimize-tax
+
+  # POST /optimize-tax Method
+  OptimizeTaxMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ResourceId: !Ref OptimizeTaxResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      RequestValidatorId: !Ref RequestValidator
+      RequestModels:
+        application/json: !Ref TaxOptimizeRequestModel
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:states:action/StartExecution'
+        Credentials: !Ref ApiExecutionRoleArn
+        RequestTemplates:
+          application/json: !Sub |
+            {
+              "stateMachineArn": "${StepFunctionsStateMachineArn}",
+              "input": "$input.json('$')"
+            }
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: |
+                {
+                  "execution_arn": "$input.path('$.executionArn')",
+                  "execution_name": "$input.path('$.name')",
+                  "status": "RUNNING",
+                  "start_time": "$context.requestTime"
+                }
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: !Ref WorkflowResponseModel
+        - StatusCode: 400
+        - StatusCode: 401
+        - StatusCode: 500
+
+  # /approval Resource
+  ApprovalResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ParentId: !GetAtt PortfolioManagementApi.RootResourceId
+      PathPart: approval
+
+  # POST /approval Method
+  ApprovalMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      ResourceId: !Ref ApprovalResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      RequestValidatorId: !Ref RequestValidator
+      RequestModels:
+        application/json: !Ref ApprovalResponseModel
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:approval-handler'
+        Credentials: !Ref ApiExecutionRoleArn
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 401
+        - StatusCode: 500
+
+  # API Gateway Deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - RebalanceMethod
+      - AnalyzeMethod
+      - OptimizeTaxMethod
+      - ApprovalMethod
+    Properties:
+      RestApiId: !Ref PortfolioManagementApi
+      StageName: !Ref Environment
+
+  # Usage Plan
+  ApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: ApiDeployment
+    Properties:
+      UsagePlanName: !Sub 'portfolio-usage-plan-${Environment}'
+      Description: Usage plan with rate limiting
+      ApiStages:
+        - ApiId: !Ref PortfolioManagementApi
+          Stage: !Ref Environment
+      Throttle:
+        BurstLimit: 200
+        RateLimit: 100
+      Quota:
+        Limit: 1000000
+        Period: DAY
+
+  # API Key
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub 'portfolio-api-key-${Environment}'
+      Description: API key for external integrations
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref PortfolioManagementApi
+          StageName: !Ref Environment
+
+  # Usage Plan Key
+  UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref ApiUsagePlan
+
+  # CORS Configuration (via Lambda integration)
+  # Note: CORS is handled at the Lambda integration level
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${PortfolioManagementApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${Environment}-PortfolioApiEndpoint'
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref PortfolioUserPool
+    Export:
+      Name: !Sub '${Environment}-PortfolioUserPoolId'
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref PortfolioUserPoolClient
+    Export:
+      Name: !Sub '${Environment}-PortfolioUserPoolClientId'
+
+  UserPoolArn:
+    Description: Cognito User Pool ARN
+    Value: !GetAtt PortfolioUserPool.Arn
+    Export:
+      Name: !Sub '${Environment}-PortfolioUserPoolArn'
+
+  ApiKeyId:
+    Description: API Key ID
+    Value: !Ref ApiKey
+    Export:
+      Name: !Sub '${Environment}-PortfolioApiKeyId'
+
+  UsagePlanId:
+    Description: Usage Plan ID
+    Value: !Ref ApiUsagePlan
+    Export:
+      Name: !Sub '${Environment}-PortfolioUsagePlanId'

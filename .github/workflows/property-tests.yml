@@ -1,0 +1,110 @@
+name: Property-Based Tests
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+  schedule:
+    # Run nightly at 02:00 UTC for extended property exploration
+    - cron: "0 2 * * *"
+
+jobs:
+  property-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Restore Hypothesis database
+        uses: actions/cache@v4
+        with:
+          path: .hypothesis
+          key: hypothesis-${{ github.sha }}
+          restore-keys: |
+            hypothesis-
+
+      - name: Run property-based tests (standard)
+        env:
+          HYPOTHESIS_MAX_EXAMPLES: "100"
+        run: |
+          pytest tests/property/ \
+            --cov=src \
+            --cov=lambda \
+            --cov-report=xml:coverage-property.xml \
+            --cov-report=term-missing \
+            --junitxml=test-results/property-tests.xml \
+            --hypothesis-show-statistics \
+            -v \
+            --tb=short
+
+      - name: Run property-based tests (extended – nightly only)
+        if: github.event_name == 'schedule'
+        env:
+          HYPOTHESIS_MAX_EXAMPLES: "500"
+        run: |
+          pytest tests/property/ \
+            --cov=src \
+            --cov=lambda \
+            --cov-report=xml:coverage-property-extended.xml \
+            --cov-report=term-missing \
+            --junitxml=test-results/property-tests-extended.xml \
+            --hypothesis-show-statistics \
+            -v \
+            --tb=long
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage-property.xml
+          flags: property-tests
+          name: property-test-coverage
+          fail_ci_if_error: false
+
+      - name: Save Hypothesis database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .hypothesis
+          key: hypothesis-${{ github.sha }}
+
+      - name: Upload Hypothesis database artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypothesis-database
+          path: .hypothesis/
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: property-test-results
+          path: test-results/
+          retention-days: 14
+
+      - name: Publish test results
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: test-results/property-tests*.xml
+          check_name: Property-Based Test Results

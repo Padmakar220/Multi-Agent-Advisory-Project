@@ -1,0 +1,40 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 2%
+    patch:
+      default:
+        target: 70%
+        threshold: 5%
+
+flags:
+  unit-tests:
+    paths:
+      - src/
+      - lambda/
+    carryforward: true
+  property-tests:
+    paths:
+      - src/
+      - lambda/
+    carryforward: true
+  integration-tests:
+    paths:
+      - src/
+      - lambda/
+    carryforward: true
+
+ignore:
+  - "tests/**"
+  - "venv/**"
+  - "**/__pycache__/**"
+  - "infrastructure/**"
+  - "scripts/**"
+  - "docs/**"
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: false

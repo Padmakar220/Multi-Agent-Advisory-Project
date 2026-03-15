@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Auto-Scaling Configuration - Lambda reserved concurrency, SQS queuing, and DynamoDB on-demand scaling'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+  EnvironmentName:
+    Type: String
+    Default: advisory
+    Description: Environment name prefix for resources
+
+  ReservedConcurrentExecutions:
+    Type: Number
+    Default: 100
+    Description: Reserved concurrent executions for agent Lambda functions
+
+Resources:
+  # ============================================================================
+  # SQS Queues for Request Queueing
+  # ============================================================================
+
+  # Dead-Letter Queue for failed requests
+  RequestQueueDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${EnvironmentName}-request-queue-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: Dead-letter queue for failed requests
+
+  # Main request queue for capacity overflow
+  RequestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${EnvironmentName}-request-queue-${Environment}'
+      VisibilityTimeout: 300  # 5 minutes
+      MessageRetentionPeriod: 345600  # 4 days
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RequestQueueDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: Queue for requests when Lambda capacity is exhausted
+
+  # ============================================================================
+  # Lambda Provisioned Concurrency Configuration (Warm Starts)
+  # ============================================================================
+  # Provisioned concurrency keeps instances warm to reduce cold start latency
+
+  # Supervisor Agent - Provisioned Concurrency for warm start
+  SupervisorAgentProvisionedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: supervisor-agent
+      ProvisionedConcurrentExecutions: 10  # Warm start instances for Supervisor
+      Qualifier: LIVE
+
+  # Portfolio Analyzer Agent - Provisioned Concurrency
+  PortfolioAnalyzerProvisionedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: portfolio-analyzer
+      ProvisionedConcurrentExecutions: 5
+      Qualifier: LIVE
+
+  # Tax Optimizer Agent - Provisioned Concurrency
+  TaxOptimizerProvisionedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: tax-optimizer
+      ProvisionedConcurrentExecutions: 5
+      Qualifier: LIVE
+
+  # Rebalancing Agent - Provisioned Concurrency
+  RebalancingAgentProvisionedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: rebalancing-agent
+      ProvisionedConcurrentExecutions: 5
+      Qualifier: LIVE
+
+  # Trade Executor - Provisioned Concurrency
+  TradeExecutorProvisionedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: trade-executor
+      ProvisionedConcurrentExecutions: 5
+      Qualifier: LIVE
+
+  # Request Queue Handler - Provisioned Concurrency
+  RequestQueueHandlerProvisionedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: request-queue-handler
+      ProvisionedConcurrentExecutions: 5
+      Qualifier: LIVE
+
+  # ============================================================================
+  # Lambda Reserved Concurrent Executions (Hard Limit)
+  # ============================================================================
+  # Reserved concurrency sets the maximum concurrent executions for each Lambda
+  # function to 100 as per Requirement 11.4. This prevents uncontrolled scaling
+  # and ensures requests are queued when capacity is reached.
+
+  SupervisorAgentReservedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: supervisor-agent
+      ProvisionedConcurrentExecutions: !Ref ReservedConcurrentExecutions
+      Qualifier: LIVE
+
+  PortfolioAnalyzerReservedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: portfolio-analyzer
+      ProvisionedConcurrentExecutions: !Ref ReservedConcurrentExecutions
+      Qualifier: LIVE
+
+  TaxOptimizerReservedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: tax-optimizer
+      ProvisionedConcurrentExecutions: !Ref ReservedConcurrentExecutions
+      Qualifier: LIVE
+
+  RebalancingAgentReservedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: rebalancing-agent
+      ProvisionedConcurrentExecutions: !Ref ReservedConcurrentExecutions
+      Qualifier: LIVE
+
+  TradeExecutorReservedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: trade-executor
+      ProvisionedConcurrentExecutions: !Ref ReservedConcurrentExecutions
+      Qualifier: LIVE
+
+  RequestQueueHandlerReservedConcurrency:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Properties:
+      FunctionName: request-queue-handler
+      ProvisionedConcurrentExecutions: !Ref ReservedConcurrentExecutions
+      Qualifier: LIVE
+
+  # ============================================================================
+  # CloudWatch Alarms for Concurrency Monitoring
+  # ============================================================================
+
+  # Alarm for Lambda throttling
+  LambdaThrottlingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-lambda-throttling-${Environment}'
+      AlarmDescription: Alert when Lambda functions are being throttled
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: supervisor-agent
+      AlarmActions:
+        - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-admin-alerts'
+
+  # Alarm for concurrent executions approaching limit
+  ConcurrentExecutionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-concurrent-executions-${Environment}'
+      AlarmDescription: Alert when concurrent executions approach limit
+      MetricName: ConcurrentExecutions
+      Namespace: AWS/Lambda
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 80  # 80% of 100
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: supervisor-agent
+      AlarmActions:
+        - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-admin-alerts'
+
+  # ============================================================================
+  # DynamoDB On-Demand Scaling Verification
+  # ============================================================================
+
+  # CloudWatch Metric for DynamoDB consumed capacity
+  DynamoDBConsumedCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-dynamodb-consumed-capacity-${Environment}'
+      AlarmDescription: Monitor DynamoDB consumed capacity for on-demand scaling
+      MetricName: ConsumedWriteCapacityUnits
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1000
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Sub '${EnvironmentName}-portfolios'
+      TreatMissingData: notBreaching
+
+  # ============================================================================
+  # Request Queue Monitoring
+  # ============================================================================
+
+  # Alarm for queue depth
+  RequestQueueDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-request-queue-depth-${Environment}'
+      AlarmDescription: Alert when request queue has pending messages
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt RequestQueue.QueueName
+      AlarmActions:
+        - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-admin-alerts'
+
+  # Alarm for DLQ messages
+  RequestQueueDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-request-queue-dlq-${Environment}'
+      AlarmDescription: Alert when messages appear in DLQ
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt RequestQueueDLQ.QueueName
+      AlarmActions:
+        - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-critical-alerts'
+
+Outputs:
+  RequestQueueUrl:
+    Description: URL of the request queue
+    Value: !Ref RequestQueue
+    Export:
+      Name: !Sub '${EnvironmentName}-request-queue-url-${Environment}'
+
+  RequestQueueArn:
+    Description: ARN of the request queue
+    Value: !GetAtt RequestQueue.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-request-queue-arn-${Environment}'
+
+  RequestQueueDLQUrl:
+    Description: URL of the request queue DLQ
+    Value: !Ref RequestQueueDLQ
+    Export:
+      Name: !Sub '${EnvironmentName}-request-queue-dlq-url-${Environment}'
+
+  RequestQueueDLQArn:
+    Description: ARN of the request queue DLQ
+    Value: !GetAtt RequestQueueDLQ.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-request-queue-dlq-arn-${Environment}'
+
+  ReservedConcurrentExecutions:
+    Description: Reserved concurrent executions per agent
+    Value: !Ref ReservedConcurrentExecutions
+    Export:
+      Name: !Sub '${EnvironmentName}-reserved-concurrent-executions-${Environment}'

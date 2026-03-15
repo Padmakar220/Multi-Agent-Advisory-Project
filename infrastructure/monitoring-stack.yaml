@@ -1,0 +1,347 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudWatch Monitoring and Alerting Stack for Multi-Agent Advisory System'
+
+Parameters:
+  AdminEmail:
+    Type: String
+    Description: Email address for admin alerts
+    Default: admin@example.com
+  
+  Environment:
+    Type: String
+    Description: Environment name
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+Resources:
+  # ============================================================================
+  # SNS Topics for Notifications
+  # ============================================================================
+  
+  AdminAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'admin-alerts-${Environment}'
+      DisplayName: 'Admin Alerts for Performance Warnings'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: PerformanceMonitoring
+
+  CriticalAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'critical-alerts-${Environment}'
+      DisplayName: 'Critical Alerts for System Failures'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: CriticalMonitoring
+
+  AdminEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref AdminAlertsTopic
+      Endpoint: !Ref AdminEmail
+
+  CriticalEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref CriticalAlertsTopic
+      Endpoint: !Ref AdminEmail
+
+  # ============================================================================
+  # CloudWatch Alarms for Performance Monitoring
+  # ============================================================================
+
+  HighAgentResponseTimeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'HighAgentResponseTime-${Environment}'
+      AlarmDescription: 'Alert when agent response time exceeds 5 seconds'
+      MetricName: AgentResponseTime
+      Namespace: MultiAgentAdvisorySystem
+      Statistic: Average
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 2
+      Threshold: 5000  # 5 seconds in milliseconds
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AdminAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: AlertType
+          Value: Performance
+
+  HighDynamoDBLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'HighDynamoDBLatency-${Environment}'
+      AlarmDescription: 'Alert when DynamoDB query latency exceeds 200ms'
+      MetricName: DynamoDBQueryLatency
+      Namespace: MultiAgentAdvisorySystem
+      Statistic: Average
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 3
+      Threshold: 200  # 200 milliseconds
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AdminAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: AlertType
+          Value: Performance
+
+  TradeExecutionFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'TradeExecutionFailures-${Environment}'
+      AlarmDescription: 'Alert when trade execution success count drops below 5'
+      MetricName: TradeExecutionSuccess
+      Namespace: MultiAgentAdvisorySystem
+      Statistic: Sum
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: AlertType
+          Value: Critical
+
+  # ============================================================================
+  # CloudWatch Alarms for Lambda Performance
+  # ============================================================================
+
+  PortfolioAnalyzerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'PortfolioAnalyzerErrors-${Environment}'
+      AlarmDescription: 'Alert when Portfolio Analyzer Lambda has errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'portfolio-analyzer-${Environment}'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  TaxOptimizerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'TaxOptimizerErrors-${Environment}'
+      AlarmDescription: 'Alert when Tax Optimizer Lambda has errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'tax-optimizer-${Environment}'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RebalancingAgentErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'RebalancingAgentErrors-${Environment}'
+      AlarmDescription: 'Alert when Rebalancing Agent Lambda has errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'rebalancing-agent-${Environment}'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  SupervisorAgentErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'SupervisorAgentErrors-${Environment}'
+      AlarmDescription: 'Alert when Supervisor Agent Lambda has errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'supervisor-agent-${Environment}'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================================
+  # CloudWatch Alarms for DynamoDB Performance
+  # ============================================================================
+
+  DynamoDBPortfoliosThrottlingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'DynamoDBPortfoliosThrottling-${Environment}'
+      AlarmDescription: 'Alert when Portfolios table is throttled'
+      MetricName: UserErrors
+      Namespace: AWS/DynamoDB
+      Dimensions:
+        - Name: TableName
+          Value: Portfolios
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  DynamoDBTransactionsThrottlingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'DynamoDBTransactionsThrottling-${Environment}'
+      AlarmDescription: 'Alert when Transactions table is throttled'
+      MetricName: UserErrors
+      Namespace: AWS/DynamoDB
+      Dimensions:
+        - Name: TableName
+          Value: Transactions
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================================
+  # CloudWatch Alarms for Step Functions
+  # ============================================================================
+
+  StepFunctionsExecutionFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'StepFunctionsExecutionFailures-${Environment}'
+      AlarmDescription: 'Alert when Step Functions executions fail'
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================================
+  # CloudWatch Log Groups
+  # ============================================================================
+
+  MonitoringLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/monitoring/${Environment}'
+      RetentionInDays: 30
+
+  MetricsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/metrics/${Environment}'
+      RetentionInDays: 30
+
+Outputs:
+  AdminAlertsTopic:
+    Description: SNS topic for admin alerts
+    Value: !Ref AdminAlertsTopic
+    Export:
+      Name: !Sub '${Environment}-AdminAlertsTopic'
+
+  CriticalAlertsTopic:
+    Description: SNS topic for critical alerts
+    Value: !Ref CriticalAlertsTopic
+    Export:
+      Name: !Sub '${Environment}-CriticalAlertsTopic'
+
+  AdminAlertsTopicArn:
+    Description: ARN of admin alerts SNS topic
+    Value: !GetAtt AdminAlertsTopic.TopicArn
+    Export:
+      Name: !Sub '${Environment}-AdminAlertsTopicArn'
+
+  CriticalAlertsTopicArn:
+    Description: ARN of critical alerts SNS topic
+    Value: !GetAtt CriticalAlertsTopic.TopicArn
+    Export:
+      Name: !Sub '${Environment}-CriticalAlertsTopicArn'
+
+  HighAgentResponseTimeAlarmName:
+    Description: Name of HighAgentResponseTime alarm
+    Value: !Ref HighAgentResponseTimeAlarm
+    Export:
+      Name: !Sub '${Environment}-HighAgentResponseTimeAlarm'
+
+  HighDynamoDBLatencyAlarmName:
+    Description: Name of HighDynamoDBLatency alarm
+    Value: !Ref HighDynamoDBLatencyAlarm
+    Export:
+      Name: !Sub '${Environment}-HighDynamoDBLatencyAlarm'
+
+  TradeExecutionFailuresAlarmName:
+    Description: Name of TradeExecutionFailures alarm
+    Value: !Ref TradeExecutionFailuresAlarm
+    Export:
+      Name: !Sub '${Environment}-TradeExecutionFailuresAlarm'

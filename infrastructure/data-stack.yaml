@@ -1,0 +1,527 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Data layer infrastructure for Multi-Agent Advisory AI System - DynamoDB tables, OpenSearch Serverless, and S3 buckets'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name prefix for resources
+    Type: String
+    Default: advisory
+    AllowedValues:
+      - advisory
+      - advisory-dev
+      - advisory-staging
+      - advisory-prod
+
+  KMSKeyId:
+    Description: KMS Key ID for DynamoDB encryption (from IAM stack)
+    Type: String
+
+Resources:
+  # ============================================================================
+  # DynamoDB Tables
+  # ============================================================================
+
+  # Portfolios Table - Stores portfolio holdings and metadata
+  PortfoliosTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub ${EnvironmentName}-portfolios
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref KMSKeyId
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: portfolio_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: portfolio_id
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-portfolios
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: Portfolio holdings and metadata storage
+
+  # Transactions Table - Stores transaction history for audit and tax reporting
+  TransactionsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub ${EnvironmentName}-transactions
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref KMSKeyId
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+        - AttributeName: portfolio_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: PortfolioIndex
+          KeySchema:
+            - AttributeName: portfolio_id
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-transactions
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: Transaction history and audit trail
+
+  # AgentSessions Table - Stores agent state and session context
+  AgentSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-agent-sessions
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref KMSKeyId
+      AttributeDefinitions:
+        - AttributeName: session_id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: session_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserIndex
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-agent-sessions
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: Agent session state and context
+
+  # MarketDataCache Table - Caches frequently accessed market data with TTL
+  MarketDataCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}-market-data-cache
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref KMSKeyId
+      AttributeDefinitions:
+        - AttributeName: data_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: data_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-market-data-cache
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: Market data caching with 5-minute TTL
+
+  # ComplianceViolations Table - Stores compliance violation records for audit and LLM Judge
+  ComplianceViolationsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub ${EnvironmentName}-compliance-violations
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref KMSKeyId
+      AttributeDefinitions:
+        - AttributeName: violation_id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+        - AttributeName: investigation_status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: violation_id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: InvestigationStatusIndex
+          KeySchema:
+            - AttributeName: investigation_status
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-compliance-violations
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: Compliance violation records for audit and LLM Judge (7-year retention)
+
+  # ============================================================================
+  # OpenSearch Serverless Collection
+  # ============================================================================
+
+  # Encryption Policy for OpenSearch Serverless
+  OpenSearchEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub ${EnvironmentName}-market-intelligence-encryption
+      Type: encryption
+      Policy: !Sub |
+        {
+          "Rules": [
+            {
+              "ResourceType": "collection",
+              "Resource": ["collection/${EnvironmentName}-market-intelligence"]
+            }
+          ],
+          "AWSOwnedKey": true
+        }
+
+  # Network Policy for OpenSearch Serverless
+  OpenSearchNetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub ${EnvironmentName}-market-intelligence-network
+      Type: network
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {
+                "ResourceType": "collection",
+                "Resource": ["collection/${EnvironmentName}-market-intelligence"]
+              },
+              {
+                "ResourceType": "dashboard",
+                "Resource": ["collection/${EnvironmentName}-market-intelligence"]
+              }
+            ],
+            "AllowFromPublic": false,
+            "SourceVPCEs": []
+          }
+        ]
+
+  # Data Access Policy for OpenSearch Serverless
+  OpenSearchDataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub ${EnvironmentName}-market-intelligence-access
+      Type: data
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {
+                "ResourceType": "collection",
+                "Resource": ["collection/${EnvironmentName}-market-intelligence"],
+                "Permission": [
+                  "aoss:CreateCollectionItems",
+                  "aoss:UpdateCollectionItems",
+                  "aoss:DescribeCollectionItems"
+                ]
+              },
+              {
+                "ResourceType": "index",
+                "Resource": ["index/${EnvironmentName}-market-intelligence/*"],
+                "Permission": [
+                  "aoss:CreateIndex",
+                  "aoss:UpdateIndex",
+                  "aoss:DescribeIndex",
+                  "aoss:ReadDocument",
+                  "aoss:WriteDocument"
+                ]
+              }
+            ],
+            "Principal": [
+              "arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-agent-execution-role"
+            ]
+          }
+        ]
+
+  # Data Access Policy for agent-interactions index
+  AgentInteractionsDataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub ${EnvironmentName}-agent-interactions-access
+      Type: data
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {
+                "ResourceType": "index",
+                "Resource": ["index/${EnvironmentName}-market-intelligence/agent-interactions"],
+                "Permission": [
+                  "aoss:CreateIndex",
+                  "aoss:UpdateIndex",
+                  "aoss:DescribeIndex",
+                  "aoss:ReadDocument",
+                  "aoss:WriteDocument"
+                ]
+              }
+            ],
+            "Principal": [
+              "arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-agent-execution-role"
+            ]
+          }
+        ]
+
+  # OpenSearch Serverless Collection
+  MarketIntelligenceCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn:
+      - OpenSearchEncryptionPolicy
+      - OpenSearchNetworkPolicy
+      - OpenSearchDataAccessPolicy
+    Properties:
+      Name: !Sub ${EnvironmentName}-market-intelligence
+      Type: VECTORSEARCH
+      Description: Market data and news for portfolio analysis with vector embeddings
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-market-intelligence
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: Vector-based market data search
+
+  # ============================================================================
+  # S3 Buckets
+  # ============================================================================
+
+  # S3 Bucket for Portfolio Reports
+  PortfolioReportsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-portfolio-reports-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref KMSKeyId
+            BucketKeyEnabled: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 90
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-portfolio-reports
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: Portfolio reports and documents storage
+
+  # S3 Bucket Policy for Agent Access
+  PortfolioReportsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PortfolioReportsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAgentExecutionRoleAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/${EnvironmentName}-agent-execution-role
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+              - 's3:ListBucket'
+            Resource:
+              - !GetAtt PortfolioReportsBucket.Arn
+              - !Sub ${PortfolioReportsBucket.Arn}/*
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt PortfolioReportsBucket.Arn
+              - !Sub ${PortfolioReportsBucket.Arn}/*
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+Outputs:
+  # DynamoDB Table Outputs
+  PortfoliosTableName:
+    Description: Name of the Portfolios DynamoDB table
+    Value: !Ref PortfoliosTable
+    Export:
+      Name: !Sub ${EnvironmentName}-portfolios-table-name
+
+  PortfoliosTableArn:
+    Description: ARN of the Portfolios DynamoDB table
+    Value: !GetAtt PortfoliosTable.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-portfolios-table-arn
+
+  PortfoliosTableStreamArn:
+    Description: Stream ARN of the Portfolios DynamoDB table
+    Value: !GetAtt PortfoliosTable.StreamArn
+    Export:
+      Name: !Sub ${EnvironmentName}-portfolios-table-stream-arn
+
+  TransactionsTableName:
+    Description: Name of the Transactions DynamoDB table
+    Value: !Ref TransactionsTable
+    Export:
+      Name: !Sub ${EnvironmentName}-transactions-table-name
+
+  TransactionsTableArn:
+    Description: ARN of the Transactions DynamoDB table
+    Value: !GetAtt TransactionsTable.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-transactions-table-arn
+
+  TransactionsTableStreamArn:
+    Description: Stream ARN of the Transactions DynamoDB table
+    Value: !GetAtt TransactionsTable.StreamArn
+    Export:
+      Name: !Sub ${EnvironmentName}-transactions-table-stream-arn
+
+  AgentSessionsTableName:
+    Description: Name of the AgentSessions DynamoDB table
+    Value: !Ref AgentSessionsTable
+    Export:
+      Name: !Sub ${EnvironmentName}-agent-sessions-table-name
+
+  AgentSessionsTableArn:
+    Description: ARN of the AgentSessions DynamoDB table
+    Value: !GetAtt AgentSessionsTable.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-agent-sessions-table-arn
+
+  MarketDataCacheTableName:
+    Description: Name of the MarketDataCache DynamoDB table
+    Value: !Ref MarketDataCacheTable
+    Export:
+      Name: !Sub ${EnvironmentName}-market-data-cache-table-name
+
+  MarketDataCacheTableArn:
+    Description: ARN of the MarketDataCache DynamoDB table
+    Value: !GetAtt MarketDataCacheTable.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-market-data-cache-table-arn
+
+  # OpenSearch Outputs
+  MarketIntelligenceCollectionArn:
+    Description: ARN of the OpenSearch Serverless collection
+    Value: !GetAtt MarketIntelligenceCollection.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-opensearch-collection-arn
+
+  MarketIntelligenceCollectionEndpoint:
+    Description: Endpoint of the OpenSearch Serverless collection
+    Value: !GetAtt MarketIntelligenceCollection.CollectionEndpoint
+    Export:
+      Name: !Sub ${EnvironmentName}-opensearch-collection-endpoint
+
+  MarketIntelligenceCollectionId:
+    Description: ID of the OpenSearch Serverless collection
+    Value: !GetAtt MarketIntelligenceCollection.Id
+    Export:
+      Name: !Sub ${EnvironmentName}-opensearch-collection-id
+
+  # S3 Outputs
+  PortfolioReportsBucketName:
+    Description: Name of the portfolio reports S3 bucket
+    Value: !Ref PortfolioReportsBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-portfolio-reports-bucket-name
+
+  PortfolioReportsBucketArn:
+    Description: ARN of the portfolio reports S3 bucket
+    Value: !GetAtt PortfolioReportsBucket.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-portfolio-reports-bucket-arn
+
+  ComplianceViolationsTableName:
+    Description: Name of the ComplianceViolations DynamoDB table
+    Value: !Ref ComplianceViolationsTable
+    Export:
+      Name: !Sub ${EnvironmentName}-compliance-violations-table-name
+
+  ComplianceViolationsTableArn:
+    Description: ARN of the ComplianceViolations DynamoDB table
+    Value: !GetAtt ComplianceViolationsTable.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-compliance-violations-table-arn
+
+  ComplianceViolationsTableStreamArn:
+    Description: Stream ARN of the ComplianceViolations DynamoDB table (for LLM Judge trigger)
+    Value: !GetAtt ComplianceViolationsTable.StreamArn
+    Export:
+      Name: !Sub ${EnvironmentName}-compliance-violations-table-stream-arn

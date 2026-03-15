@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Compute Stack - Lambda Functions and Step Functions Workflow'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  AgentExecutionRoleArn:
+    Type: String
+    Description: ARN of the AgentExecutionRole from IAM stack
+  
+  StepFunctionsExecutionRoleArn:
+    Type: String
+    Description: ARN of the StepFunctionsExecutionRole from IAM stack
+
+Resources:
+  # SNS Topic for workflow errors
+  PortfolioWorkflowErrorsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'portfolio-workflow-errors-${Environment}'
+      DisplayName: Portfolio Workflow Errors
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Step Functions State Machine
+  PortfolioRebalancingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineType: STANDARD
+      RoleArn: !Ref StepFunctionsExecutionRoleArn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Portfolio Rebalancing Workflow with Approval and Error Handling",
+          "StartAt": "InitializeSupervisor",
+          "States": {
+            "InitializeSupervisor": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:supervisor-agent",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "AnalyzePortfolio",
+              "TimeoutSeconds": 300
+            },
+            "AnalyzePortfolio": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:portfolio-analyzer",
+              "TimeoutSeconds": 300,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "OptimizeTaxes"
+            },
+            "OptimizeTaxes": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:tax-optimizer",
+              "TimeoutSeconds": 300,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "CalculateRebalancing"
+            },
+            "CalculateRebalancing": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rebalancing-agent",
+              "TimeoutSeconds": 300,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "AggregateResults"
+            },
+            "AggregateResults": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:supervisor-agent",
+              "TimeoutSeconds": 300,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "WaitForApproval"
+            },
+            "WaitForApproval": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:approval-handler",
+                "Payload": {
+                  "token.$": "$.Task.Token",
+                  "input.$": "$"
+                }
+              },
+              "TimeoutSeconds": 86400,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "CheckApprovalStatus"
+            },
+            "CheckApprovalStatus": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.approval_status",
+                  "StringEquals": "approved",
+                  "Next": "ExecuteTrades"
+                },
+                {
+                  "Variable": "$.approval_status",
+                  "StringEquals": "rejected",
+                  "Next": "HandleRejection"
+                }
+              ],
+              "Default": "WorkflowCancelled"
+            },
+            "ExecuteTrades": {
+              "Type": "Map",
+              "ItemsPath": "$.trade_orders",
+              "Iterator": {
+                "StartAt": "ExecuteSingleTrade",
+                "States": {
+                  "ExecuteSingleTrade": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:trade-executor",
+                    "TimeoutSeconds": 300,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 5,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "ResultPath": "$.error",
+                        "Next": "TradeFailure"
+                      }
+                    ],
+                    "End": true
+                  },
+                  "TradeFailure": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:trade-failure-handler",
+                    "End": true
+                  }
+                }
+              },
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "UpdatePortfolio"
+            },
+            "UpdatePortfolio": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:portfolio-updater",
+              "TimeoutSeconds": 300,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "WorkflowComplete"
+            },
+            "HandleRejection": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:rejection-handler",
+              "TimeoutSeconds": 300,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "ErrorNotification"
+                }
+              ],
+              "Next": "WorkflowComplete"
+            },
+            "ErrorNotification": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${PortfolioWorkflowErrorsTopic}",
+                "Subject": "Portfolio Workflow Error",
+                "Message.$": "$.error"
+              },
+              "Next": "WorkflowFailed"
+            },
+            "WorkflowCancelled": {
+              "Type": "Succeed"
+            },
+            "WorkflowComplete": {
+              "Type": "Succeed"
+            },
+            "WorkflowFailed": {
+              "Type": "Fail",
+              "Error": "WorkflowExecutionFailed",
+              "Cause": "Workflow encountered an error and could not complete"
+            }
+          }
+        }
+      LoggingConfiguration:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsDestination:
+              LogGroupName: !Ref StepFunctionsLogGroup
+              RoleArn: !GetAtt StepFunctionsLoggingRole.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudWatch Log Group for Step Functions
+  StepFunctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/stepfunctions/portfolio-rebalancing-${Environment}'
+      RetentionInDays: 30
+
+  # IAM Role for Step Functions Logging
+  StepFunctionsLoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsLogging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the Portfolio Rebalancing State Machine
+    Value: !Ref PortfolioRebalancingStateMachine
+    Export:
+      Name: !Sub '${Environment}-PortfolioRebalancingStateMachineArn'
+
+  ErrorsTopicArn:
+    Description: ARN of the SNS topic for workflow errors
+    Value: !Ref PortfolioWorkflowErrorsTopic
+    Export:
+      Name: !Sub '${Environment}-PortfolioWorkflowErrorsTopicArn'
+
+  LogGroupName:
+    Description: CloudWatch Log Group for Step Functions
+    Value: !Ref StepFunctionsLogGroup
+    Export:
+      Name: !Sub '${Environment}-StepFunctionsLogGroup'

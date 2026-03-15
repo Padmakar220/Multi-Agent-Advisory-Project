@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EventBridge Stack - Market Data Ingestion Scheduling'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  MarketDataIngestionLambdaArn:
+    Type: String
+    Description: ARN of the market-data-ingestion Lambda function
+
+Resources:
+  # EventBridge Rule for market data ingestion
+  # Triggers every 15 minutes during market hours (9:30 AM - 4:00 PM ET)
+  MarketDataIngestionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'market-data-ingestion-${Environment}'
+      Description: 'Trigger market data ingestion every 15 minutes during market hours'
+      # Cron expression: 0 9-15 ? * MON-FRI (9:00 AM - 3:59 PM UTC = 9:30 AM - 4:00 PM ET)
+      # Runs at :00, :15, :30, :45 minutes
+      ScheduleExpression: 'cron(0,15,30,45 9-15 ? * MON-FRI *)'
+      State: ENABLED
+      Targets:
+        - Arn: !Ref MarketDataIngestionLambdaArn
+          Id: MarketDataIngestionTarget
+          RoleArn: !GetAtt EventBridgeInvokeLambdaRole.Arn
+
+  # IAM Role for EventBridge to invoke Lambda
+  EventBridgeInvokeLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: !Ref MarketDataIngestionLambdaArn
+
+  # Lambda permission for EventBridge to invoke
+  MarketDataIngestionLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:market-data-ingestion'
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MarketDataIngestionRule.Arn
+
+Outputs:
+  MarketDataIngestionRuleArn:
+    Description: ARN of the market data ingestion EventBridge rule
+    Value: !GetAtt MarketDataIngestionRule.Arn
+    Export:
+      Name: !Sub '${Environment}-MarketDataIngestionRuleArn'
+  
+  MarketDataIngestionRuleName:
+    Description: Name of the market data ingestion EventBridge rule
+    Value: !Ref MarketDataIngestionRule
+    Export:
+      Name: !Sub '${Environment}-MarketDataIngestionRuleName'

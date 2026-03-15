@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Master stack for Multi-Agent Advisory AI System - orchestrates all nested stacks'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Deployment environment
+
+  TemplatesBucketName:
+    Type: String
+    Description: S3 bucket containing nested stack templates
+
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for VPC
+
+  PublicSubnet1CIDR:
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnet2CIDR:
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: 10.0.3.0/24
+
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: 10.0.4.0/24
+
+Mappings:
+  EnvironmentConfig:
+    dev:
+      LogRetentionDays: 7
+      LambdaMemorySize: 512
+      EnableDetailedMonitoring: false
+    staging:
+      LogRetentionDays: 30
+      LambdaMemorySize: 1024
+      EnableDetailedMonitoring: true
+    prod:
+      LogRetentionDays: 90
+      LambdaMemorySize: 1024
+      EnableDetailedMonitoring: true
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/infrastructure/network-stack.yaml'
+      Parameters:
+        EnvironmentName: !Sub 'advisory-${Environment}'
+        VpcCIDR: !Ref VpcCIDR
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
+        PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: MultiAgentAdvisory
+        - Key: Stack
+          Value: network
+
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/infrastructure/iam-stack.yaml'
+      Parameters:
+        EnvironmentName: !Sub 'advisory-${Environment}'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: MultiAgentAdvisory
+        - Key: Stack
+          Value: iam
+
+  DataStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: IAMStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/infrastructure/data-stack.yaml'
+      Parameters:
+        EnvironmentName: !Sub 'advisory-${Environment}'
+        KMSKeyId: !GetAtt IAMStack.Outputs.KMSKeyId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: MultiAgentAdvisory
+        - Key: Stack
+          Value: data
+
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - NetworkStack
+      - IAMStack
+      - DataStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/infrastructure/compute-stack.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        AgentExecutionRoleArn: !GetAtt IAMStack.Outputs.AgentExecutionRoleArn
+        StepFunctionsExecutionRoleArn: !GetAtt IAMStack.Outputs.StepFunctionsExecutionRoleArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: MultiAgentAdvisory
+        - Key: Stack
+          Value: compute
+
+  APIStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: ComputeStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/infrastructure/api-stack.yaml'
+      Parameters:
+        Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: MultiAgentAdvisory
+        - Key: Stack
+          Value: api
+
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: ComputeStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/infrastructure/monitoring-stack.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        LogRetentionDays: !FindInMap [EnvironmentConfig, !Ref Environment, LogRetentionDays]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: MultiAgentAdvisory
+        - Key: Stack
+          Value: monitoring
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !GetAtt APIStack.Outputs.ApiEndpoint
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  StateMachineArn:
+    Description: Step Functions state machine ARN
+    Value: !GetAtt ComputeStack.Outputs.StateMachineArn
+    Export:
+      Name: !Sub '${AWS::StackName}-StateMachineArn'
+
+  VpcId:
+    Description: VPC ID
+    Value: !GetAtt NetworkStack.Outputs.VpcId
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'

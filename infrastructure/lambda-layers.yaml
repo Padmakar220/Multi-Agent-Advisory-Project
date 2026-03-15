@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lambda Layers for shared libraries - Multi-Agent Advisory AI System'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  LayersBucketName:
+    Type: String
+    Description: S3 bucket containing layer zip files
+
+Resources:
+  # Core AWS + utilities layer (boto3, pydantic, python-dateutil, requests)
+  CoreDependenciesLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub 'advisory-core-deps-${Environment}'
+      Description: 'Core dependencies: boto3, pydantic, aws-lambda-powertools'
+      Content:
+        S3Bucket: !Ref LayersBucketName
+        S3Key: layers/core-dependencies.zip
+      CompatibleRuntimes:
+        - python3.11
+      CompatibleArchitectures:
+        - x86_64
+
+  # LangGraph + LangChain layer (larger, changes less frequently)
+  LangGraphLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub 'advisory-langgraph-${Environment}'
+      Description: 'LangGraph and LangChain for agent orchestration'
+      Content:
+        S3Bucket: !Ref LayersBucketName
+        S3Key: layers/langgraph-dependencies.zip
+      CompatibleRuntimes:
+        - python3.11
+      CompatibleArchitectures:
+        - x86_64
+
+  # Shared application code layer (src/ utilities)
+  SharedCodeLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub 'advisory-shared-code-${Environment}'
+      Description: 'Shared application code: models, utils, mcp_tools, security'
+      Content:
+        S3Bucket: !Ref LayersBucketName
+        S3Key: layers/shared-code.zip
+      CompatibleRuntimes:
+        - python3.11
+      CompatibleArchitectures:
+        - x86_64
+
+Outputs:
+  CoreDependenciesLayerArn:
+    Value: !Ref CoreDependenciesLayer
+    Export:
+      Name: !Sub '${AWS::StackName}-CoreDependenciesLayerArn'
+
+  LangGraphLayerArn:
+    Value: !Ref LangGraphLayer
+    Export:
+      Name: !Sub '${AWS::StackName}-LangGraphLayerArn'
+
+  SharedCodeLayerArn:
+    Value: !Ref SharedCodeLayer
+    Export:
+      Name: !Sub '${AWS::StackName}-SharedCodeLayerArn'
