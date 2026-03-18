@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Article Hero Image</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0f1e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: "Segoe UI", Arial, sans-serif;
+  }
+  /* Print / screenshot at exactly 1200×628 (LinkedIn OG size) */
+  .card {
+    width: 1200px;
+    height: 628px;
+    background: linear-gradient(135deg, #0a0f1e 0%, #0d1b3e 60%, #0a1628 100%);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+
+  /* ── subtle grid lines ── */
+  .card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  /* ── glow blobs ── */
+  .blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: .18;
+  }
+  .blob-1 { width: 500px; height: 500px; background: #1a6cf5; top: -120px; left: -100px; }
+  .blob-2 { width: 400px; height: 400px; background: #00c896; bottom: -100px; right: -80px; }
+  .blob-3 { width: 300px; height: 300px; background: #7c3aed; top: 50px; right: 200px; opacity: .12; }
+
+  /* ── layout ── */
+  .content {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    padding: 0 72px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+
+  /* ── eyebrow ── */
+  .eyebrow {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #00c896;
+    margin-bottom: 18px;
+  }
+
+  /* ── headline ── */
+  .headline {
+    font-size: 46px;
+    font-weight: 800;
+    color: #ffffff;
+    text-align: center;
+    line-height: 1.15;
+    max-width: 860px;
+    margin-bottom: 10px;
+  }
+  .headline .accent { color: #4da6ff; }
+
+  /* ── sub-headline ── */
+  .sub {
+    font-size: 18px;
+    color: rgba(255,255,255,.55);
+    text-align: center;
+    max-width: 700px;
+    line-height: 1.5;
+    margin-bottom: 44px;
+  }
+
+  /* ── four pillars ── */
+  .pillars {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+  .pillar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 14px;
+    padding: 18px 22px;
+    width: 210px;
+    backdrop-filter: blur(4px);
+    transition: border-color .2s;
+  }
+  .pillar-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+  }
+  .p1 .pillar-icon { background: rgba(77,166,255,.15); }
+  .p2 .pillar-icon { background: rgba(0,200,150,.15); }
+  .p3 .pillar-icon { background: rgba(255,180,0,.15); }
+  .p4 .pillar-icon { background: rgba(200,100,255,.15); }
+
+  .pillar-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.4);
+  }
+  .pillar-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    text-align: center;
+    line-height: 1.3;
+  }
+  .p1 .pillar-name { color: #4da6ff; }
+  .p2 .pillar-name { color: #00c896; }
+  .p3 .pillar-name { color: #ffb400; }
+  .p4 .pillar-name { color: #c864ff; }
+
+  /* ── connector arrows between pillars ── */
+  .arrow {
+    color: rgba(255,255,255,.2);
+    font-size: 20px;
+    align-self: center;
+    margin-top: -8px;
+  }
+
+  /* ── bottom bar ── */
+  .bottom-bar {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+  }
+  .tag {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,.35);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 20px;
+    padding: 5px 14px;
+  }
+  .dot { color: rgba(255,255,255,.15); font-size: 18px; }
+  .author {
+    font-size: 13px;
+    color: rgba(255,255,255,.35);
+    font-weight: 500;
+  }
+  .author span { color: rgba(255,255,255,.6); font-weight: 700; }
+
+  /* ── glass box frame (decorative) ── */
+  .glass-frame {
+    position: absolute;
+    top: 32px; left: 32px; right: 32px; bottom: 32px;
+    border: 1px solid rgba(77,166,255,.12);
+    border-radius: 20px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .glass-frame::before {
+    content: "";
+    position: absolute;
+    top: -1px; left: 40px; right: 40px; height: 2px;
+    background: linear-gradient(90deg, transparent, #4da6ff, transparent);
+    opacity: .5;
+  }
+  .glass-frame::after {
+    content: "";
+    position: absolute;
+    bottom: -1px; left: 40px; right: 40px; height: 2px;
+    background: linear-gradient(90deg, transparent, #00c896, transparent);
+    opacity: .5;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <!-- decorative elements -->
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+  <div class="glass-frame"></div>
+
+  <div class="content">
+
+    <div class="eyebrow">Financial Services · Agentic AI · Regulatory Compliance</div>
+
+    <div class="headline">
+      The AI Compliance Gap<br>
+      in Financial Services —<br>
+      <span class="accent">And How Agentic Workflows Close It</span>
+    </div>
+
+    <div class="sub">
+      A "Glass Box" framework that makes every AI decision transparent,<br>
+      traceable, and compliant — before it reaches a client.
+    </div>
+
+    <!-- Four Pillars -->
+    <div class="pillars">
+
+      <div class="pillar p1">
+        <div class="pillar-icon">⚖️</div>
+        <div class="pillar-label">Pillar 1</div>
+        <div class="pillar-name">Compliance<br>as Code</div>
+      </div>
+
+      <div class="arrow">›</div>
+
+      <div class="pillar p2">
+        <div class="pillar-icon">🔭</div>
+        <div class="pillar-label">Pillar 2</div>
+        <div class="pillar-name">OpenTelemetry<br>Tracing</div>
+      </div>
+
+      <div class="arrow">›</div>
+
+      <div class="pillar p3">
+        <div class="pillar-icon">🧑‍⚖️</div>
+        <div class="pillar-label">Pillar 3</div>
+        <div class="pillar-name">LLM-as-a-Judge<br>Oversight</div>
+      </div>
+
+      <div class="arrow">›</div>
+
+      <div class="pillar p4">
+        <div class="pillar-icon">✅</div>
+        <div class="pillar-label">Pillar 4</div>
+        <div class="pillar-name">Human-in-the-Loop<br>Approval</div>
+      </div>
+
+    </div>
+
+    <!-- Bottom bar -->
+    <div class="bottom-bar">
+      <div class="tag">FINRA RN 24-09</div>
+      <div class="tag">NIST AI RMF 1.0</div>
+      <div class="tag">PCI DSS v4.0</div>
+      <div class="dot">·</div>
+      <div class="author">By <span>Padmakar Bhosale</span></div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

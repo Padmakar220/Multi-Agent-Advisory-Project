@@ -103,65 +103,65 @@ The implementation follows a bottom-up approach: infrastructure → data layer �
     - Add context managers for trace ID propagation
     - _Requirements: 13.4, 14.1_
 
-- [ ] 5. Implement MCP tools for agent-service connectivity
-  - [ ] 5.1 Create GetPortfolioTool for DynamoDB portfolio retrieval
+- [x] 5. Implement MCP tools for agent-service connectivity
+  - [x] 5.1 Create GetPortfolioTool for DynamoDB portfolio retrieval
     - Implement execute method to query Portfolios table by user_id and portfolio_id
     - Add error handling for missing portfolios and DynamoDB errors
     - Return Portfolio object with all holdings and metadata
     - _Requirements: 2.1, 8.1_
 
-  - [ ] 5.2 Write property test for portfolio data retrieval
+  - [x] 5.2 Write property test for portfolio data retrieval
     - **Property 5: Agent Data Retrieval Success**
     - **Property 33: Portfolio Data Retrieval Performance**
     - **Validates: Requirements 2.1, 8.3**
 
-  - [ ] 5.3 Create GetCostBasisTool for tax basis information
+  - [x] 5.3 Create GetCostBasisTool for tax basis information
     - Implement execute method to retrieve cost basis data from DynamoDB
     - Query Portfolios table for specific ticker holdings with purchase dates
     - Return CostBasisInfo with cost per share and purchase date
     - _Requirements: 3.1, 8.4_
 
-  - [ ] 5.4 Write property test for cost basis data completeness
+  - [x] 5.4 Write property test for cost basis data completeness
     - **Property 34: Cost Basis Data Completeness**
     - **Validates: Requirements 8.4**
 
-  - [ ] 5.5 Create QueryMarketDataTool for OpenSearch vector search
+  - [x] 5.5 Create QueryMarketDataTool for OpenSearch vector search
     - Implement execute method to perform knn vector search on OpenSearch
     - Generate query embeddings using Bedrock Titan Embeddings model
     - Return ranked market data results with similarity scores
     - Implement caching with MarketDataCache table (5-minute TTL)
     - _Requirements: 2.4, 9.1, 9.2, 9.3_
 
-  - [ ] 5.6 Write property tests for market data operations
+  - [x] 5.6 Write property tests for market data operations
     - **Property 37: Vector Search Execution**
     - **Property 38: Market Data Cache TTL**
     - **Property 40: Cached Data Fallback with Notification**
     - **Validates: Requirements 9.2, 9.3, 9.5**
 
-  - [ ] 5.7 Create ManageAgentStateTool for session persistence
+  - [x] 5.7 Create ManageAgentStateTool for session persistence
     - Implement save_state method to persist agent state to AgentSessions table
     - Implement load_state method to retrieve session state by session_id
     - Add TTL calculation (24 hours from last update)
     - _Requirements: 7.1, 7.3, 7.5_
 
-  - [ ] 5.8 Write property test for state round-trip persistence
+  - [x] 5.8 Write property test for state round-trip persistence
     - **Property 28: Agent State Round-Trip Persistence**
     - **Validates: Requirements 7.1, 7.3, 7.5**
 
-  - [ ] 5.9 Create ExecuteTradeTool for brokerage API integration
+  - [x] 5.9 Create ExecuteTradeTool for brokerage API integration
     - Implement execute method to invoke trade-executor Lambda function
     - Pass TradeOrder with all required fields (action, ticker, quantity, order_type)
     - Return TradeConfirmation with execution details
     - Add circuit breaker for brokerage API failures
     - _Requirements: 6.1, 6.2_
 
-- [ ] 6. Checkpoint - Verify MCP tools and data layer
+- [x] 6. Checkpoint - Verify MCP tools and data layer
   - Ensure all MCP tools can connect to DynamoDB, OpenSearch, and S3
   - Run unit tests for data models and MCP tools
   - Verify IAM permissions allow tool operations
   - Ask the user if questions arise
 
-- [-] 7. Implement Portfolio Analyzer Agent
+- [x] 7. Implement Portfolio Analyzer Agent
   - [x] 7.1 Create Lambda function structure for Portfolio Analyzer
     - Create lambda/portfolio-analyzer directory with handler.py
     - Implement lambda_handler entry point accepting AnalysisRequest
@@ -1240,15 +1240,94 @@ The implementation follows a bottom-up approach: infrastructure → data layer �
     - Document rollback criteria and procedures
     - _Requirements: All_
 
+- [x] 32. Migrate agent state persistence to AgentCore Memory (Requirement 22)
+  - [x] 32.1 Configure AgentCore Memory namespaces
+    - Create session-scoped memory namespace keyed by session_id for short-term context (conversation history, workflow state, user preferences within a session)
+    - Create user-scoped memory namespace keyed by user_id for long-term cross-session memory (risk profile, historical trade preferences, recurring instructions)
+    - Configure IAM resource policies to enforce namespace isolation between users
+    - _Requirements: 22.1, 22.2, 22.3, 22.4_
+
+  - [x] 32.2 Replace ManageAgentStateTool reads with AgentCore Memory reads
+    - Update ManageAgentStateTool.load_state() to call AgentCore Memory GET on session_id namespace
+    - Fall back to DynamoDB AgentSessions table if AgentCore Memory returns empty (migration compatibility)
+    - Remove direct DynamoDB GetItem calls for session state from all agent Lambda handlers
+    - _Requirements: 22.1_
+
+  - [x] 32.3 Replace ManageAgentStateTool writes with AgentCore Memory writes
+    - Update ManageAgentStateTool.save_state() to call AgentCore Memory PUT on session_id namespace
+    - Write long-term fields (risk_profile, trade_preferences) to user_id namespace on session end
+    - Remove direct DynamoDB PutItem calls for session state from all agent Lambda handlers
+    - _Requirements: 22.2, 22.3_
+
+  - [x] 32.4 Instrument AgentCore Memory calls with OTEL spans
+    - Wrap every AgentCore Memory read and write in a child OTEL_Trace span
+    - Set span attributes: memory_namespace, memory_operation (read/write), duration_ms, status
+    - _Requirements: 22.8_
+
+  - [x] 32.5 Write property tests for AgentCore Memory integration
+    - **Property 85: Session Memory Round-Trip** — state written to AgentCore Memory at session end is retrievable at next session start for the same session_id
+    - **Property 86: Long-Term Memory Persistence** — user-scoped fields written on session end are present in a new session for the same user_id
+    - **Property 87: Memory Namespace Isolation** — agent cannot read memory records belonging to a different user_id
+    - Configure Hypothesis with max_examples=100
+    - _Requirements: 22.1, 22.2, 22.3, 22.4_
+
+  - [x] 32.6 Write unit tests for AgentCore Memory migration
+    - Test load_state() with mocked AgentCore Memory client returning data
+    - Test load_state() fallback path when AgentCore Memory returns empty
+    - Test save_state() writing to both session and user namespaces
+    - Test OTEL span attribute correctness for memory operations
+    - _Requirements: 22.1, 22.2, 22.3, 22.8_
+
+- [x] 33. Integrate AgentCore Identity and Gateway (Requirement 22)
+  - [x] 33.1 Configure AgentCore Identity per-agent OAuth 2.0 scopes
+    - Define scope set for Supervisor Agent: invoke:portfolio-analyzer, invoke:tax-optimizer, invoke:rebalancing-agent
+    - Define scope set for Portfolio Analyzer: read:portfolio-data, read:market-data, invoke:bedrock
+    - Define scope set for Tax Optimizer: read:portfolio-data, read:cost-basis, invoke:bedrock
+    - Define scope set for Rebalancing Agent: read:portfolio-data, invoke:bedrock, invoke:trade-executor
+    - _Requirements: 22.6_
+
+  - [x] 33.2 Replace static IAM credential assumption with AgentCore Identity token exchange
+    - Update each agent Lambda handler to call AgentCore Identity token exchange at invocation start
+    - Use returned short-lived token for all downstream tool and brokerage API calls within that invocation
+    - Remove hardcoded IAM role assumption (sts:AssumeRole) from agent Lambda code
+    - _Requirements: 22.5_
+
+  - [x] 33.3 Register MCP tools as AgentCore Gateway managed endpoints
+    - Register GetPortfolioTool, GetCostBasisTool, QueryMarketDataTool, and ExecuteTradeTool as MCP tool definitions in AgentCore Gateway
+    - Update agent Lambda handlers to invoke tools via AgentCore Gateway endpoint rather than direct Lambda invocation
+    - Retain existing tool interface contracts (input schema, output schema) unchanged
+    - _Requirements: 22.7_
+
+  - [x] 33.4 Write property tests for AgentCore Identity and Gateway
+    - **Property 88: Per-Agent Scope Enforcement** — token issued to agent type X does not grant access to scopes defined only for agent type Y
+    - **Property 89: Gateway Tool Invocation Round-Trip** — tool call via AgentCore Gateway returns identical result to direct Lambda invocation for any valid input
+    - Configure Hypothesis with max_examples=100
+    - _Requirements: 22.5, 22.6, 22.7_
+
+  - [x] 33.5 Write unit tests for Identity and Gateway integration
+    - Test token exchange with mocked AgentCore Identity client
+    - Test scope rejection for out-of-scope tool calls
+    - Test Gateway tool invocation with mocked endpoint
+    - Test fallback error handling when AgentCore Identity is unavailable
+    - _Requirements: 22.5, 22.6, 22.7_
+
+  - [x] 33.6 Update deployment stacks for AgentCore resources
+    - Add AgentCore Memory namespace configuration to ai-stack.yaml
+    - Add AgentCore Identity scope definitions to ai-stack.yaml
+    - Add AgentCore Gateway tool registrations to ai-stack.yaml
+    - Update compute-stack.yaml Lambda environment variables to reference AgentCore endpoints
+    - _Requirements: 22.1, 22.5, 22.7_
+
 ## Notes
 
 - Tasks marked with `*` are optional testing tasks and can be skipped for faster MVP delivery
 - Each task references specific requirements for traceability
 - Checkpoints ensure incremental validation at key milestones
-- Property tests validate universal correctness properties (84 total: 65 original + 19 new for requirements 16-21)
+- Property tests validate universal correctness properties (94 total: 84 existing + 5 new for Requirement 22 Memory + 5 new for Requirement 22 Identity/Gateway)
 - Unit tests validate specific examples and edge cases; src/compliance/ requires 100% coverage enforced by CI
 - Integration tests validate end-to-end workflows including compliance screening and distributed tracing
 - Performance tests validate latency and throughput requirements (screening ≤500ms, RAG ≤300ms p95)
+- Tasks 32–33 are additive migrations — existing Lambda hosting remains functional during transition; AgentCore Memory includes a DynamoDB fallback in Task 32.2 for zero-downtime migration
 - The implementation uses Python 3.11 as specified in the design document
 - All AWS services are configured for serverless, auto-scaling operation
 - Security is implemented at every layer (network, IAM, encryption, audit logging)

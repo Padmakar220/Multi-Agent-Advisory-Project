@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>13 Rules Reference Card</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0f1e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: "Segoe UI", Arial, sans-serif;
+  }
+
+  .card {
+    width: 1200px;
+    background: linear-gradient(135deg, #0a0f1e 0%, #0d1b3e 60%, #0a1628 100%);
+    position: relative;
+    overflow: hidden;
+    padding: 52px 64px 52px 64px;
+  }
+
+  /* subtle grid */
+  .card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  /* glow blobs */
+  .blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: .13;
+    pointer-events: none;
+  }
+  .blob-1 { width: 500px; height: 500px; background: #1a6cf5; top: -150px; left: -100px; }
+  .blob-2 { width: 400px; height: 400px; background: #00c896; bottom: -120px; right: -80px; }
+
+  /* glass frame */
+  .glass-frame {
+    position: absolute;
+    top: 24px; left: 24px; right: 24px; bottom: 24px;
+    border: 1px solid rgba(77,166,255,.12);
+    border-radius: 20px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .glass-frame::before {
+    content: "";
+    position: absolute;
+    top: -1px; left: 40px; right: 40px; height: 2px;
+    background: linear-gradient(90deg, transparent, #4da6ff, transparent);
+    opacity: .5;
+  }
+  .glass-frame::after {
+    content: "";
+    position: absolute;
+    bottom: -1px; left: 40px; right: 40px; height: 2px;
+    background: linear-gradient(90deg, transparent, #00c896, transparent);
+    opacity: .5;
+  }
+
+  /* content */
+  .content { position: relative; z-index: 2; }
+
+  /* header */
+  .header {
+    text-align: center;
+    margin-bottom: 36px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #00c896;
+    margin-bottom: 12px;
+  }
+  .title {
+    font-size: 30px;
+    font-weight: 800;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .title span { color: #4da6ff; }
+  .subtitle {
+    font-size: 14px;
+    color: rgba(255,255,255,.4);
+  }
+
+  /* three columns */
+  .columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 20px;
+  }
+
+  /* framework block */
+  .framework { display: flex; flex-direction: column; gap: 0; }
+
+  .fw-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-radius: 10px 10px 0 0;
+    margin-bottom: 2px;
+  }
+  .fw-finra  { background: rgba(77,166,255,.15);  border: 1px solid rgba(77,166,255,.25); }
+  .fw-nist   { background: rgba(0,200,150,.15);   border: 1px solid rgba(0,200,150,.25); }
+  .fw-pci    { background: rgba(255,100,100,.15); border: 1px solid rgba(255,100,100,.25); }
+
+  .fw-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  }
+  .fw-finra .fw-dot { background: #4da6ff; }
+  .fw-nist  .fw-dot { background: #00c896; }
+  .fw-pci   .fw-dot { background: #ff6464; }
+
+  .fw-name {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+  .fw-finra .fw-name { color: #4da6ff; }
+  .fw-nist  .fw-name { color: #00c896; }
+  .fw-pci   .fw-name { color: #ff6464; }
+
+  .fw-source {
+    font-size: 10px;
+    color: rgba(255,255,255,.3);
+    margin-left: auto;
+    font-style: italic;
+  }
+
+  /* rule rows */
+  .rule {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 16px;
+    background: rgba(255,255,255,.03);
+    border-left: 1px solid rgba(255,255,255,.07);
+    border-right: 1px solid rgba(255,255,255,.07);
+    border-bottom: 1px solid rgba(255,255,255,.05);
+  }
+  .rule:last-child {
+    border-radius: 0 0 10px 10px;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+  }
+
+  .rule-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .rule-id {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,.3);
+    font-family: "Courier New", monospace;
+  }
+
+  /* severity badges */
+  .badge {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 20px;
+    flex-shrink: 0;
+  }
+  .critical { background: rgba(255,60,60,.2);   color: #ff6060; border: 1px solid rgba(255,60,60,.3); }
+  .high     { background: rgba(255,160,0,.15);  color: #ffb400; border: 1px solid rgba(255,160,0,.25); }
+  .medium   { background: rgba(150,150,255,.15);color: #a0a0ff; border: 1px solid rgba(150,150,255,.25); }
+
+  .rule-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.3;
+  }
+  .rule-desc {
+    font-size: 11px;
+    color: rgba(255,255,255,.38);
+    line-height: 1.4;
+  }
+
+  /* footer */
+  .footer {
+    margin-top: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: rgba(255,255,255,.35);
+  }
+  .sep { color: rgba(255,255,255,.12); font-size: 16px; }
+  .author-note {
+    font-size: 11px;
+    color: rgba(255,255,255,.25);
+    margin-left: 16px;
+  }
+  .author-note span { color: rgba(255,255,255,.5); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="glass-frame"></div>
+
+  <div class="content">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="eyebrow">Compliance-as-Code · Glass Box Framework</div>
+      <div class="title">13 Inline Compliance Rules — <span>Enforced on Every AI Decision</span></div>
+      <div class="subtitle">FINRA RN 24-09 · NIST AI RMF 1.0 · PCI DSS v4.0 — active simultaneously on every input and every output</div>
+    </div>
+
+    <!-- Three columns -->
+    <div class="columns">
+
+      <!-- FINRA -->
+      <div class="framework">
+        <div class="fw-header fw-finra">
+          <div class="fw-dot"></div>
+          <div class="fw-name">FINRA</div>
+          <div class="fw-source">RN 24-09 · Rule 2210 · Rule 3110</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">FINRA-001</div>
+            <div class="badge high">High</div>
+          </div>
+          <div class="rule-name">Suitability Check</div>
+          <div class="rule-desc">AI advice without a documented suitability basis is blocked before reaching the client.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">FINRA-002</div>
+            <div class="badge high">High</div>
+          </div>
+          <div class="rule-name">Mandatory AI Disclosure</div>
+          <div class="rule-desc">Every AI-generated recommendation must carry explicit disclosure language.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">FINRA-003</div>
+            <div class="badge high">High</div>
+          </div>
+          <div class="rule-name">Supervision Evidence</div>
+          <div class="rule-desc">Automated execution requires documented human supervision before proceeding.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">FINRA-004</div>
+            <div class="badge high">High</div>
+          </div>
+          <div class="rule-name">No Misleading Language</div>
+          <div class="rule-desc">Guaranteed returns, risk-free, and absolute certainty language are detected and suppressed.</div>
+        </div>
+      </div>
+
+      <!-- NIST -->
+      <div class="framework">
+        <div class="fw-header fw-nist">
+          <div class="fw-dot"></div>
+          <div class="fw-name">NIST AI RMF</div>
+          <div class="fw-source">AI 100-1 · January 2023</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">NIST-001</div>
+            <div class="badge high">High</div>
+          </div>
+          <div class="rule-name">Bias & Fairness</div>
+          <div class="rule-desc">Demographic bias indicators and protected-class language are flagged in AI outputs.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">NIST-002</div>
+            <div class="badge medium">Medium</div>
+          </div>
+          <div class="rule-name">Explainability Markers</div>
+          <div class="rule-desc">Decisions lacking transparency or explainability markers are flagged for review.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">NIST-003</div>
+            <div class="badge critical">Critical</div>
+          </div>
+          <div class="rule-name">Prompt Injection Detection</div>
+          <div class="rule-desc">Adversarial inputs, instruction overrides, and jailbreak patterns are halted immediately.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">NIST-004</div>
+            <div class="badge high">High</div>
+          </div>
+          <div class="rule-name">PII Exposure Prevention</div>
+          <div class="rule-desc">SSN, email, phone, date of birth, and address patterns are detected and blocked.</div>
+        </div>
+      </div>
+
+      <!-- PCI DSS -->
+      <div class="framework">
+        <div class="fw-header fw-pci">
+          <div class="fw-dot"></div>
+          <div class="fw-name">PCI DSS v4.0</div>
+          <div class="fw-source">Req 3.2 · Req 3.3 · ISO/IEC 7812-1</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">PCI-001</div>
+            <div class="badge critical">Critical</div>
+          </div>
+          <div class="rule-name">Card Number Detection</div>
+          <div class="rule-desc">Payment card numbers validated via Luhn algorithm are blocked before reaching any model.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">PCI-002</div>
+            <div class="badge critical">Critical</div>
+          </div>
+          <div class="rule-name">CVV Detection</div>
+          <div class="rule-desc">Card verification values detected in context are intercepted at the pipeline boundary.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">PCI-003</div>
+            <div class="badge high">High</div>
+          </div>
+          <div class="rule-name">Expiry Date Detection</div>
+          <div class="rule-desc">Card expiry date patterns (MM/YY, MM/YYYY) are detected and suppressed.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">PCI-004</div>
+            <div class="badge critical">Critical</div>
+          </div>
+          <div class="rule-name">Sensitive Auth Data</div>
+          <div class="rule-desc">Magnetic stripe, PIN block, and chip data are blocked from entering the AI pipeline.</div>
+        </div>
+
+        <div class="rule">
+          <div class="rule-top">
+            <div class="rule-id">PCI-005</div>
+            <div class="badge medium">Medium</div>
+          </div>
+          <div class="rule-name">Data Minimisation</div>
+          <div class="rule-desc">Unnecessary retention or transmission of cardholder data is flagged and logged.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <div class="legend-item"><div class="badge critical">Critical</div> Halt + Investigate</div>
+      <div class="sep">|</div>
+      <div class="legend-item"><div class="badge high">High</div> Halt + Log</div>
+      <div class="sep">|</div>
+      <div class="legend-item"><div class="badge medium">Medium</div> Warn + Continue</div>
+      <div class="sep">|</div>
+      <div class="author-note">Thresholds configurable per domain · By <span>Padmakar Bhosale</span></div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

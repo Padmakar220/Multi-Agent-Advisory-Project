@@ -4,6 +4,8 @@
 
 The Multi-Agent Advisory AI System is an advanced portfolio management platform that leverages specialized AI agents to provide tax-optimized, real-time portfolio adjustments. The system uses AWS serverless infrastructure (Bedrock, AgentCore, DynamoDB, Lambda, Step Functions, S3, OpenSearch Serverless) and LangGraph orchestration to coordinate multiple specialized agents that analyze portfolios, optimize tax strategies, and execute rebalancing operations with human-in-the-loop approval.
 
+The system implements a "Glass Box" compliance architecture across four pillars: (1) Compliance-as-Code — 13 FINRA/NIST/PCI DSS rules enforced inline via a standalone Python library; (2) OpenTelemetry tracing — 11 instrumented stages per request via AWS Distro for OpenTelemetry and W3C TraceContext; (3) LLM-as-a-Judge — autonomous second-line-of-defence review of every compliance violation via Claude 3.5 Sonnet on Amazon Bedrock; (4) Human-in-the-Loop — structural trade approval enforced via AWS Step Functions WaitForTaskToken before any execution proceeds.
+
 ## Glossary
 
 - **System**: The Multi-Agent Advisory AI System
@@ -26,6 +28,9 @@ The Multi-Agent Advisory AI System is an advanced portfolio management platform 
 - **Groundedness**: The degree to which an LLM output is factually supported by the retrieved context (RAG sources) rather than hallucinated
 - **Relevance**: The degree to which an LLM output directly addresses the user's query and the agent's assigned task
 - **RAG**: Retrieval-Augmented Generation — the pattern of enriching LLM prompts with documents retrieved from OpenSearch before model invocation
+- **AgentCore_Memory**: Amazon Bedrock AgentCore managed memory store providing short-term session memory (keyed by session_id) and long-term cross-session memory (keyed by user_id) for all agents
+- **AgentCore_Identity**: Amazon Bedrock AgentCore managed identity service that vends short-lived OAuth 2.0 tokens to agents for external tool and API access, enforcing per-agent-type scope restrictions
+- **AgentCore_Gateway**: Amazon Bedrock AgentCore managed MCP server that hosts MCP tools as managed endpoints, replacing direct Lambda-to-Lambda tool invocation
 
 ## Requirements
 
@@ -267,6 +272,21 @@ The Multi-Agent Advisory AI System is an advanced portfolio management platform 
 4. WHEN no relevant documents are found above the configured similarity threshold, THE System SHALL proceed without RAG context and log a warning indicating low-context generation
 5. THE System SHALL record which documents were retrieved for each prompt in the corresponding OTEL_Trace span (document_ids, similarity_scores) to support groundedness evaluation under Requirement 17
 6. RAG retrieval latency SHALL not exceed 300 milliseconds at the 95th percentile
+
+### Requirement 22: Amazon Bedrock AgentCore — Memory and Identity
+
+**User Story:** As a platform engineer, I want agent session memory and per-agent identity managed by Amazon Bedrock AgentCore, so that the system eliminates custom state-persistence code, gains cross-session long-term memory, and delegates secure credential vending to a managed service.
+
+#### Acceptance Criteria
+
+1. WHEN an agent session begins, THE System SHALL retrieve short-term session memory from AgentCore Memory using the session_id as the memory namespace, replacing direct reads from the AgentSessions DynamoDB table
+2. WHEN an agent session ends or checkpoints, THE System SHALL persist session context — including conversation history, user preferences, and workflow state — to AgentCore Memory, replacing direct writes to the AgentSessions DynamoDB table
+3. THE System SHALL store cross-session long-term memory (user risk profile, historical trade preferences, recurring instructions) in AgentCore Memory under the user_id namespace, retrievable on every new session
+4. THE System SHALL isolate AgentCore Memory namespaces between users such that no agent can read or write another user's memory records
+5. WHEN an agent requires credentials to call an external tool or brokerage API, THE System SHALL obtain short-lived credentials via AgentCore Identity token exchange rather than embedding static credentials or assuming IAM roles directly in Lambda code
+6. AgentCore Identity SHALL enforce per-agent OAuth 2.0 scopes so that each agent type (Supervisor, Portfolio Analyzer, Tax Optimizer, Rebalancing Agent) can only access the external services its role requires
+7. THE System SHALL expose existing MCP tools (GetPortfolioTool, GetCostBasisTool, QueryMarketDataTool, ExecuteTradeTool) via AgentCore Gateway as managed MCP endpoints, removing the direct Lambda-to-Lambda invocation pattern for tool calls
+8. All AgentCore Memory reads and writes SHALL be recorded in the OTEL_Trace span for the corresponding agent stage (attributes: memory_namespace, memory_operation, duration_ms)
 
 ### Requirement 21: Compliance-as-a-Code Library
 

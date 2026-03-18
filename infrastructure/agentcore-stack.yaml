@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AgentCore Stack — Memory namespaces, Identity scopes, and Gateway tool registrations (Requirement 22)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  AgentExecutionRoleArn:
+    Type: String
+    Description: ARN of the AgentExecutionRole from IAM stack
+
+  LLMJudgeLambdaRoleArn:
+    Type: String
+    Description: ARN of the LLMJudgeLambdaRole from IAM stack
+
+Resources:
+
+  # -----------------------------------------------------------------------
+  # AgentCore Memory — DynamoDB table backing the memory namespaces
+  # -----------------------------------------------------------------------
+  AgentCoreMemoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'AgentCoreMemory-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: namespace
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: NamespaceIndex
+          KeySchema:
+            - AttributeName: namespace
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: AgentCoreMemory
+
+  # IAM policy granting agent Lambda read/write access to AgentCoreMemory
+  AgentCoreMemoryAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'AgentCoreMemoryAccess-${Environment}'
+      Description: Allows agent Lambdas to read/write AgentCore Memory namespaces
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAgentMemoryReadWrite
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+            Resource:
+              - !GetAtt AgentCoreMemoryTable.Arn
+              - !Sub '${AgentCoreMemoryTable.Arn}/index/*'
+            # Namespace isolation: agents can only access their own namespace prefix
+            Condition:
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys:
+                  - 'session:*'
+                  - 'user:*'
+
+  # -----------------------------------------------------------------------
+  # AgentCore Identity — SSM parameters storing per-agent scope definitions
+  # -----------------------------------------------------------------------
+  SupervisorAgentScopes:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/identity/${Environment}/scopes/supervisor'
+      Type: StringList
+      Value: 'invoke:portfolio-analyzer,invoke:tax-optimizer,invoke:rebalancing-agent'
+      Description: OAuth 2.0 scopes for Supervisor Agent
+
+  PortfolioAnalyzerScopes:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/identity/${Environment}/scopes/portfolio_analyzer'
+      Type: StringList
+      Value: 'read:portfolio-data,read:market-data,invoke:bedrock'
+      Description: OAuth 2.0 scopes for Portfolio Analyzer Agent
+
+  TaxOptimizerScopes:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/identity/${Environment}/scopes/tax_optimizer'
+      Type: StringList
+      Value: 'read:portfolio-data,read:cost-basis,invoke:bedrock'
+      Description: OAuth 2.0 scopes for Tax Optimizer Agent
+
+  RebalancingAgentScopes:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/identity/${Environment}/scopes/rebalancing_agent'
+      Type: StringList
+      Value: 'read:portfolio-data,invoke:bedrock,invoke:trade-executor'
+      Description: OAuth 2.0 scopes for Rebalancing Agent
+
+  # -----------------------------------------------------------------------
+  # AgentCore Gateway — SSM parameters for registered MCP tool endpoints
+  # -----------------------------------------------------------------------
+  GatewayToolGetPortfolio:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/gateway/${Environment}/tools/get_portfolio'
+      Type: String
+      Value: !Sub '{"scope":"read:portfolio-data","lambda_function":"get-portfolio-tool-${Environment}"}'
+      Description: AgentCore Gateway registration for GetPortfolioTool
+
+  GatewayToolGetCostBasis:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/gateway/${Environment}/tools/get_cost_basis'
+      Type: String
+      Value: !Sub '{"scope":"read:cost-basis","lambda_function":"get-cost-basis-tool-${Environment}"}'
+      Description: AgentCore Gateway registration for GetCostBasisTool
+
+  GatewayToolQueryMarketData:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/gateway/${Environment}/tools/query_market_data'
+      Type: String
+      Value: !Sub '{"scope":"read:market-data","lambda_function":"query-market-data-tool-${Environment}"}'
+      Description: AgentCore Gateway registration for QueryMarketDataTool
+
+  GatewayToolExecuteTrade:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/agentcore/gateway/${Environment}/tools/execute_trade'
+      Type: String
+      Value: !Sub '{"scope":"invoke:trade-executor","lambda_function":"execute-trade-tool-${Environment}"}'
+      Description: AgentCore Gateway registration for ExecuteTradeTool
+
+Outputs:
+  AgentCoreMemoryTableName:
+    Description: Name of the AgentCore Memory DynamoDB table
+    Value: !Ref AgentCoreMemoryTable
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentCoreMemoryTableName'
+
+  AgentCoreMemoryTableArn:
+    Description: ARN of the AgentCore Memory DynamoDB table
+    Value: !GetAtt AgentCoreMemoryTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentCoreMemoryTableArn'
+
+  AgentCoreMemoryAccessPolicyArn:
+    Description: ARN of the AgentCore Memory access policy
+    Value: !Ref AgentCoreMemoryAccessPolicy
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentCoreMemoryAccessPolicyArn'
